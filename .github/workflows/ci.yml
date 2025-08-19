@@ -1,0 +1,95 @@
+name: AJD Topic Explorer CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Rebuild merged CSVs from chunked parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+
+          # Validate chunk presence
+          echo "Listing chunk files..."
+          ls -la data || true
+
+          # ---- Rebuild ajd_topics_extracted.csv ----
+          # Expecting: data/ajd_topics_extracted.part01.csv ... part12.csv
+          if ls data/ajd_topics_extracted.part*.csv 1> /dev/null 2>&1; then
+            echo "Merging ajd_topics_extracted parts..."
+            # Write header from part01, then append all remaining without headers
+            head -n 1 data/ajd_topics_extracted.part01.csv > data/ajd_topics_extracted.csv
+            for f in data/ajd_topics_extracted.part*.csv; do
+              if [[ "$f" != "data/ajd_topics_extracted.part01.csv" ]]; then
+                tail -n +2 "$f" >> data/ajd_topics_extracted.csv
+              fi
+            done
+          fi
+
+          # ---- Rebuild ajd_catalogue_raw.csv ----
+          # Expecting: data/ajd_catalogue_raw.part01.csv ... part07.csv
+          if ls data/ajd_catalogue_raw.part*.csv 1> /dev/null 2>&1; then
+            echo "Merging ajd_catalogue_raw parts..."
+            head -n 1 data/ajd_catalogue_raw.part01.csv > data/ajd_catalogue_raw.csv
+            for f in data/ajd_catalogue_raw.part*.csv; do
+              if [[ "$f" != "data/ajd_catalogue_raw.part01.csv" ]]; then
+                tail -n +2 "$f" >> data/ajd_catalogue_raw.csv
+              fi
+            done
+          fi
+
+          # Sanity checks
+          echo "Row counts:"
+          python - << 'PY'
+import pandas as pd, os
+for name in ["data/ajd_topics_extracted.csv","data/ajd_catalogue_raw.csv"]:
+    if os.path.exists(name):
+        df = pd.read_csv(name)
+        print(f"{name}: {len(df):,} rows, {len(df.columns)} cols")
+    else:
+        print(f"{name}: MISSING")
+PY
+
+      - name: Run compare_topics.py (examples)
+        run: |
+          python scripts/compare_topics.py \
+            --ajd-topics data/ajd_topics_extracted.csv \
+            --project-file examples/project_topics.csv \
+            --project-topics-col topics \
+            --out comparison_report.json
+
+      - name: Run similarity_matches.py (examples)
+        run: |
+          python scripts/similarity_matches.py \
+            --ajd-catalogue data/ajd_catalogue_raw.csv \
+            --project-json examples/project_films.json \
+            --out similarity_matches.json
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ajd-reports
+          path: |
+            comparison_report.json
+            similarity_matches.json
