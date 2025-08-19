@@ -25,7 +25,6 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
                     out.write(f.read())
     return True
 
-
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
     topics_csv = DATA_DIR / "ajd_topics_extracted.csv"
@@ -41,9 +40,11 @@ def load_topics_df() -> pd.DataFrame:
             })
             return df[["topic", "count"]]
         if len(df.columns) >= 2:
-            return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"})[["topic", "count"]]
+            return df.rename(columns={
+                df.columns[0]: "topic",
+                df.columns[1]: "count"
+            })[["topic", "count"]]
     return pd.DataFrame(columns=["topic", "count"])
-
 
 @st.cache_data(show_spinner=False)
 def load_catalogue_df() -> pd.DataFrame:
@@ -97,6 +98,7 @@ def load_catalogue_df() -> pd.DataFrame:
     st.sidebar.write(f"Loaded catalogue: {df.shape[0]:,} rows × {df.shape[1]} cols")
 
     return df
+
 # ---------------- app ----------------
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
