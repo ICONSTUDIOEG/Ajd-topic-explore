@@ -10,7 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 APP_TITLE = "AJD Topic Explorer — Search • Compare • Suggest"
 DATA_DIR = Path("data")
 
-# ---------- helpers ----------
+# ---------------- helpers ----------------
 def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
     parts = sorted(glob.glob(pattern))
     if not parts:
@@ -66,12 +66,13 @@ def tfidf_similarities(ajd_texts: List[str], proj_texts: List[str], min_df: int 
     sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
     return pd.DataFrame(sim), list(range(n_ajd))
 
-# ---------- app ----------
+# ---------------- app ----------------
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
     st.caption("Search the Al Jazeera Documentary catalogue, compare your projects, and get stronger loglines.")
 
+    # Sidebar status
     with st.sidebar:
         st.header("Dataset")
         topics_df = load_topics_df()
@@ -89,132 +90,106 @@ def main() -> None:
                 "Ensure `/data/ajd_topics_extracted.part01.csv…` and `/data/ajd_catalogue_raw.part01.csv…` exist."
             )
 
-    search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
-        "🔎 Search AJD Catalogue", "🔁 Topic Overlap", "🧭 Similarity Matches", "🪄 Logline Suggestions", "🧰 Diagnostics"
+    # CREATE TABS FIRST (so variables exist)
+    tabs = st.tabs([
+        "🔎 Search AJD Catalogue",
+        "🔁 Topic Overlap",
+        "🧭 Similarity Matches",
+        "🪄 Logline Suggestions",
+        "🧰 Diagnostics"
     ])
-   
- # -----------------------------
-# TAB 1: Search
-# -----------------------------
-with search_tab:
-    st.subheader("Search AJD Catalogue")
-    cat_df = load_catalogue_df()
-    if cat_df.empty:
-        st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
-    else:
-        # ---------- options ----------
-        text_cols_default = infer_text_columns(cat_df)
-        cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default)
-        search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
+    search_tab, compare_tab, similar_tab, logline_tab, diag_tab = tabs
 
-        q = st.text_input("Keyword or phrase")
-        mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
-        normalize_ar = st.checkbox("Normalize Arabic (remove diacritics; normalize alef/ya/ta marbuta)", value=True)
-        strip_punct = st.checkbox("Strip punctuation in both data and query", value=True)
-        max_rows = st.slider("Max rows to show", 10, 2000, 200)
+    # ---------------- TAB 1: Search ----------------
+    with search_tab:
+        st.subheader("Search AJD Catalogue")
+        cat_df = load_catalogue_df()
+        if cat_df.empty:
+            st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
+        else:
+            text_cols_default = infer_text_columns(cat_df)
+            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default)
+            search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
 
-        # ---------- helpers for normalization ----------
-        import unicodedata, string
+            q = st.text_input("Keyword or phrase")
+            mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
+            normalize_ar = st.checkbox("Normalize Arabic (diacritics + alef/ya/ta marbuta)", value=True)
+            strip_punct = st.checkbox("Strip punctuation", value=True)
+            max_rows = st.slider("Max rows to show", 10, 2000, 200)
 
-        def ar_norm(s: str) -> str:
-            if not isinstance(s, str):
-                s = str(s)
-            # remove diacritics
-            s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
-            # normalize Arabic letters
-            s = (s
-                 .replace("أ","ا").replace("إ","ا").replace("آ","ا")
-                 .replace("ى","ي").replace("ي","ى")  # unify ya/alef maqsura — pick one form
-                 .replace("ئ","ي").replace("ؤ","و")
-                 .replace("ة","ه"))  # or replace with "ة" consistently; choose one
-            return s
+            import unicodedata, string
+            def ar_norm(s: str) -> str:
+                if not isinstance(s, str):
+                    s = str(s)
+                s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+                s = (s
+                    .replace("أ","ا").replace("إ","ا").replace("آ","ا")
+                    .replace("ى","ي").replace("ي","ى")
+                    .replace("ئ","ي").replace("ؤ","و")
+                    .replace("ة","ه"))
+                return s
+            def sanitize(s: str) -> str:
+                if not isinstance(s, str):
+                    s = str(s)
+                if normalize_ar:
+                    s = ar_norm(s)
+                if strip_punct:
+                    s = s.translate(str.maketrans("", "", string.punctuation))
+                return s
 
-        def sanitize(s: str) -> str:
-            if not isinstance(s, str):
-                s = str(s)
-            if normalize_ar:
-                s = ar_norm(s)
-            if strip_punct:
-                s = s.translate(str.maketrans("", "", string.punctuation))
-            return s
-
-        # ---------- quick probe ----------
-        if st.button("Quick Probe (show per-column matches)"):
-            if not q:
-                st.warning("Enter a query first.")
-            else:
-                # pick columns to probe
-                probe_cols = list(cat_df.columns) if search_all or not cols else cols
-                # build normalized series per column
-                hit_counts = []
-                qx = sanitize(q).strip().lower()
-                for c in probe_cols:
-                    s = cat_df[c].astype(str).fillna("")
-                    s2 = s.apply(sanitize).str.lower()
-                    if mode == "Contains (case-insensitive)":
-                        hits = s2.str.contains(qx, na=False, regex=False).sum()
-                    elif mode == "Exact (case-insensitive)":
-                        hits = (s2.str.strip() == qx).sum()
-                    else:
-                        # regex on sanitized text
+            if st.button("Quick Probe (per-column matches)"):
+                if not q:
+                    st.warning("Enter a query first.")
+                else:
+                    probe_cols = list(cat_df.columns) if search_all or not cols else cols
+                    qx = sanitize(q).strip().lower()
+                    hits = []
+                    for c in probe_cols:
+                        s2 = cat_df[c].astype(str).fillna("").apply(sanitize).str.lower()
                         try:
-                            hits = s2.str.contains(qx, na=False, regex=True).sum()
+                            if mode == "Contains (case-insensitive)":
+                                n = s2.str.contains(qx, na=False, regex=False).sum()
+                            elif mode == "Exact (case-insensitive)":
+                                n = (s2.str.strip() == qx).sum()
+                            else:
+                                n = s2.str.contains(qx, na=False, regex=True).sum()
                         except Exception:
-                            hits = 0
-                    hit_counts.append((c, int(hits)))
-                probe_df = pd.DataFrame(hit_counts, columns=["column", "matches"]).sort_values("matches", ascending=False)
-                st.write("**Matches per column** (top 25):")
-                st.dataframe(probe_df.head(25), use_container_width=True)
+                            n = 0
+                        hits.append((c, int(n)))
+                    st.dataframe(pd.DataFrame(hits, columns=["column","matches"]).sort_values("matches", ascending=False).head(25), use_container_width=True)
 
-        # ---------- search ----------
-        if st.button("Search", type="primary"):
-            if not q:
-                st.warning("Provide a query.")
-            else:
-                try:
-                    use_cols = list(cat_df.columns) if search_all or not cols else cols
-                    mask = pd.Series(False, index=cat_df.index)
-
-                    if normalize_ar or strip_punct:
-                        # Sanitize field-by-field and apply contains/exact/regex on sanitized text
+            if st.button("Search", type="primary"):
+                if not q:
+                    st.warning("Provide a query.")
+                else:
+                    try:
+                        use_cols = list(cat_df.columns) if search_all or not cols else cols
+                        mask = pd.Series(False, index=cat_df.index)
                         qx = sanitize(q).strip().lower()
                         for c in use_cols:
-                            s = cat_df[c].astype(str).fillna("")
-                            s2 = s.apply(sanitize).str.lower()
-                            if mode == "Contains (case-insensitive)":
-                                mask |= s2.str.contains(qx, na=False, regex=False)
-                            elif mode == "Exact (case-insensitive)":
-                                mask |= (s2.str.strip() == qx)
-                            else:
-                                try:
+                            s2 = cat_df[c].astype(str).fillna("").apply(sanitize).str.lower()
+                            try:
+                                if mode == "Contains (case-insensitive)":
+                                    mask |= s2.str.contains(qx, na=False, regex=False)
+                                elif mode == "Exact (case-insensitive)":
+                                    mask |= (s2.str.strip() == qx)
+                                else:
                                     mask |= s2.str.contains(qx, na=False, regex=True)
-                                except Exception:
-                                    pass
-                    else:
-                        # Original, faster path: no heavy sanitization
-                        for c in use_cols:
-                            s = cat_df[c].astype(str).fillna("")
-                            if mode == "Contains (case-insensitive)":
-                                mask |= s.str.contains(q, case=False, na=False, regex=False)
-                            elif mode == "Exact (case-insensitive)":
-                                mask |= s.str.strip().str.lower() == q.strip().lower()
-                            else:
-                                mask |= s.str.contains(q, case=False, na=False, regex=True)
+                            except Exception:
+                                pass
+                        total = int(mask.sum())
+                        res = cat_df[mask].head(max_rows)
+                        st.success(f"Found {total:,} rows; showing {len(res):,}.")
+                        if total == 0:
+                            st.info("No matches. Use Quick Probe, try Search ALL columns, toggle normalization, or switch modes.")
+                        st.dataframe(res, use_container_width=True)
+                        if not res.empty:
+                            st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
+                                               file_name="ajd_search_results.csv", mime="text/csv")
+                    except Exception as e:
+                        st.error(f"Search error: {e}")
 
-                    total = int(mask.sum())
-                    res = cat_df[mask].head(max_rows)
-                    st.success(f"Found {total:,} rows; showing {len(res):,}.")
-                    if total == 0:
-                        st.info("No matches. Use Quick Probe to see which columns match your query, try Search ALL columns, toggle normalization, or switch modes.")
-                    st.dataframe(res, use_container_width=True)
-                    if not res.empty:
-                        st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
-                                           file_name="ajd_search_results.csv", mime="text/csv")
-                except Exception as e:
-                    st.error(f"Search error: {e}")
-
-
-    # TAB 2: Topic Overlap
+    # ---------------- TAB 2: Topic Overlap ----------------
     with compare_tab:
         st.subheader("Compare Your Project Topics vs AJD Topics")
         topics_df = load_topics_df()
@@ -269,7 +244,7 @@ with search_tab:
             except Exception as e:
                 st.error(f"Error processing upload: {e}")
 
-    # TAB 3: Similarity Matches (TF-IDF)
+    # ---------------- TAB 3: Similarity Matches ----------------
     with similar_tab:
         st.subheader("Find Closest AJD Matches for Your Films (TF-IDF)")
         cat_df = load_catalogue_df()
@@ -301,7 +276,7 @@ with search_tab:
                 except Exception as e:
                     st.error(f"Invalid JSON or error computing similarities: {e}")
 
-    # TAB 4: Logline Suggestions
+    # ---------------- TAB 4: Logline Suggestions ----------------
     with logline_tab:
         st.subheader("Suggest Strong Loglines")
         st.caption("Craft angles that feel fresh relative to AJD coverage.")
@@ -331,7 +306,7 @@ with search_tab:
                 st.download_button("Download loglines (.txt)", ("\n".join(logs)).encode("utf-8"),
                                    file_name=(f"loglines_{pmpt_code or 'untagged'}.txt"))
 
-    # TAB 5: Diagnostics
+    # ---------------- TAB 5: Diagnostics ----------------
     with diag_tab:
         st.subheader("Diagnostics")
         data_files = sorted(glob.glob(str(DATA_DIR / "*")))
@@ -352,3 +327,4 @@ with search_tab:
 
 if __name__ == "__main__":
     main()
+    
