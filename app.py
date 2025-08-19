@@ -58,7 +58,6 @@ def load_topics_df() -> pd.DataFrame:
         return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"})[["topic", "count"]]
 
 
-
 @st.cache_data(show_spinner=False)
 def load_catalogue_df() -> pd.DataFrame:
     """Robust loader: auto-merge parts; try several encodings & delimiters; clean columns/rows."""
