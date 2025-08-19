@@ -38,7 +38,6 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
                     out.write(f.read())     # data only
     return True
 
-
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
     p = DATA_DIR / "ajd_topics_extracted.csv"
@@ -56,8 +55,8 @@ def load_topics_df() -> pd.DataFrame:
                                 df.columns[cols.index("count")]: "count"})
         return df[["topic", "count"]]
     if len(df.columns) >= 2:
-        return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"])[["topic", "count"]]
-    return pd.DataFrame(columns=["topic", "count"])
+        return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"})[["topic", "count"]]
+
 
 
 @st.cache_data(show_spinner=False)
