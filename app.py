@@ -21,8 +21,11 @@ DATA_DIR = Path("data")
 # ============================ Helpers ============================
 
 def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
-    """Merge chunked CSVs (part01, part02, …) into a single CSV."""
-    parts = sorted(glob.glob(pattern))
+    import re, glob, os
+    def _natsort_key(s: str):
+        # split into digit / non-digit runs so "part3_02" > "part3_01" and after "part02"
+        return [int(t) if t.isdigit() else t.lower() for t in re.findall(r'\d+|\D+', os.path.basename(s))]
+    parts = sorted(glob.glob(pattern), key=_natsort_key)
     if not parts:
         return False
     merged_path.parent.mkdir(parents=True, exist_ok=True)
@@ -30,12 +33,11 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
         for i, p in enumerate(parts):
             with open(p, "r", encoding="utf-8") as f:
                 if i == 0:
-                    out.write(f.read())
+                    out.write(f.read())         # write header + data from first file
                 else:
-                    _ = f.readline()  # skip header
-                    out.write(f.read())
+                    _ = f.readline()            # skip header in subsequent files
+                    out.write(f.read())         # write only data lines
     return True
-
 
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
