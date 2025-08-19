@@ -1,13 +1,11 @@
-import re
-import json
-import glob
+import re, json, glob, os
 from pathlib import Path
 from typing import List, Tuple
 
 import pandas as pd
 import streamlit as st
 
-# Optional (only used in Similarity tab). If not installed, that tab will be disabled gracefully.
+# Optional (Similarity tab)
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
@@ -21,10 +19,11 @@ DATA_DIR = Path("data")
 # ============================ Helpers ============================
 
 def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
-    import re, glob, os
+    """Merge chunked CSVs (part01, part02, part3_01, ...) using natural sort."""
+    import re as _re
     def _natsort_key(s: str):
-        # split into digit / non-digit runs so "part3_02" > "part3_01" and after "part02"
-        return [int(t) if t.isdigit() else t.lower() for t in re.findall(r'\d+|\D+', os.path.basename(s))]
+        base = os.path.basename(s)
+        return [int(t) if t.isdigit() else t.lower() for t in _re.findall(r"\d+|\D+", base)]
     parts = sorted(glob.glob(pattern), key=_natsort_key)
     if not parts:
         return False
@@ -33,15 +32,15 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
         for i, p in enumerate(parts):
             with open(p, "r", encoding="utf-8") as f:
                 if i == 0:
-                    out.write(f.read())         # write header + data from first file
+                    out.write(f.read())     # header + data
                 else:
-                    _ = f.readline()            # skip header in subsequent files
-                    out.write(f.read())         # write only data lines
+                    _ = f.readline()        # skip header
+                    out.write(f.read())     # data only
     return True
+
 
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
-    """Load topics file or auto-merge parts."""
     p = DATA_DIR / "ajd_topics_extracted.csv"
     if not p.exists():
         _merge_chunked_csv(str(DATA_DIR / "ajd_topics_extracted.part*.csv"), p)
@@ -57,7 +56,7 @@ def load_topics_df() -> pd.DataFrame:
                                 df.columns[cols.index("count")]: "count"})
         return df[["topic", "count"]]
     if len(df.columns) >= 2:
-        return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"})[["topic", "count"]]
+        return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"])[["topic", "count"]]
     return pd.DataFrame(columns=["topic", "count"])
 
 
@@ -102,7 +101,7 @@ def load_catalogue_df() -> pd.DataFrame:
     if not df.empty:
         df = df.loc[~(df.apply(lambda r: "".join(map(str, r)).strip(), axis=1) == "")]
 
-    # Show quick shape
+    # Quick shape
     st.sidebar.write(f"Loaded catalogue: {df.shape[0]:,} rows × {df.shape[1]} cols")
     return df
 
@@ -115,13 +114,11 @@ def infer_text_columns(df: pd.DataFrame) -> List[str]:
 
 @st.cache_data(show_spinner=False)
 def tfidf_similarities(ajd_texts: List[str], proj_texts: List[str], min_df: int = 2) -> Tuple[pd.DataFrame, List[int]]:
-    corpus = ajd_texts + proj_texts
     vectorizer = TfidfVectorizer(min_df=min_df, ngram_range=(1, 2))
-    X = vectorizer.fit_transform(corpus)
+    X = vectorizer.fit_transform(ajd_texts + proj_texts)
     n_ajd = len(ajd_texts)
     sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
     return pd.DataFrame(sim), list(range(n_ajd))
-
 
 # ============================ App ============================
 
@@ -143,7 +140,7 @@ def main() -> None:
         if topics_df.empty or cat_df.empty:
             st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
 
-    # ----- Tabs (define BEFORE use to avoid NameError) -----
+    # ----- Tabs (define BEFORE use) -----
     search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
         "🔎 Search AJD Catalogue",
         "🔁 Topic Overlap",
@@ -159,9 +156,12 @@ def main() -> None:
         if cat_df.empty:
             st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
         else:
-            # Options
+            # Use preset from Diagnostics if available
             text_cols_default = infer_text_columns(cat_df)
-            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default or list(cat_df.columns)[:5])
+            preset = st.session_state.get("diag_cols_preset")
+            default_cols = preset if (preset and all(c in cat_df.columns for c in preset)) else (text_cols_default or list(cat_df.columns)[:5])
+
+            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=default_cols)
             search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
             fallback_combine = st.checkbox("Fallback: combine selected columns into one field", value=True)
 
@@ -169,7 +169,7 @@ def main() -> None:
             mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
             max_rows = st.slider("Max rows to show", 10, 2000, 200)
 
-            # Cleaners for hidden/zero-width chars and whitespace
+            # Clean hidden zero-width/RTL chars and whitespace
             import re as _re
             ZW_PATTERN = _re.compile(r"[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
             WS_PATTERN = _re.compile(r"\s+")
@@ -201,7 +201,6 @@ def main() -> None:
                         except Exception:
                             n = 0
                         out.append((c, int(n)))
-
                         nonempty.append((c, int((s != "").sum())))
                     st.write("**Matches per column (top 25):**")
                     st.dataframe(pd.DataFrame(out, columns=["column","matches"]).sort_values("matches", ascending=False).head(25), use_container_width=True)
@@ -334,7 +333,10 @@ def main() -> None:
                 st.info("Catalogue missing. Add CSVs to /data and reload.")
             else:
                 text_cols_default = infer_text_columns(cat_df)
-                cols = st.multiselect("AJD text columns to use", options=list(cat_df.columns), default=text_cols_default or list(cat_df.columns)[:5])
+                preset = st.session_state.get("diag_cols_preset")
+                default_cols = preset if (preset and all(c in cat_df.columns for c in preset)) else (text_cols_default or list(cat_df.columns)[:5])
+
+                cols = st.multiselect("AJD text columns to use", options=list(cat_df.columns), default=default_cols)
                 films = st.text_area("Paste your films as JSON list (each item: title, description, topics optional)",
                     value='[\n  {"title":"Film A","description":"Inside the rise of tech startups in MENA."},\n  {"title":"Film B","description":"Lives split across continents."}\n]')
                 if st.button("Compute matches", type="primary"):
@@ -380,10 +382,7 @@ def main() -> None:
                 ("Unexpected Ally/Adversary", "pairs unlikely characters or groups in tension."),
                 ("Future Stakes", "connects today's choice to tomorrow's irreversible outcome."),
             ]
-            outs = []
-            for _, (title, angle) in enumerate(angles[:n]):
-                outs.append(f"{title}: In one line — {seed_txt} — a story where it {angle}")
-            return outs
+            return [f"{t}: In one line — {seed_txt} — a story where it {a}" for (t, a) in angles[:n]]
 
         if st.button("Generate loglines", type="primary"):
             if not seed:
@@ -402,7 +401,6 @@ def main() -> None:
         files = sorted(glob.glob(str(DATA_DIR / "*")))
         st.write("**/data files**:", files)
 
-        p_topics = DATA_DIR / "ajd_topics_extracted.csv"
         p_cat = DATA_DIR / "ajd_catalogue_raw.csv"
         if p_cat.exists():
             st.write(f"Catalogue file size: {p_cat.stat().st_size:,} bytes")
@@ -420,11 +418,49 @@ def main() -> None:
         else:
             st.warning("DataFrame is empty after loading. This usually means delimiter/encoding issues or an empty file.")
 
-        if p_topics.exists():
-            st.write("Topics head:")
-            st.dataframe(pd.read_csv(p_topics, dtype=str, na_filter=False, keep_default_na=False, engine="python", on_bad_lines="skip").head(10))
+        # Column preset for Search tab
+        st.markdown("### Column preset for Search tab")
+        if not cat_df_preview.empty:
+            preset_cols = st.multiselect(
+                "Columns to search in (preset for Search tab)",
+                options=list(cat_df_preview.columns),
+                default=texty or list(cat_df_preview.columns)[:5],
+                key="diag_cols_preset",
+            )
+            st.caption("This preset is saved in session; the Search tab will use it automatically.")
         else:
-            st.info("Topics merged CSV missing")
+            st.info("Load a catalogue first to configure the column preset.")
+
+        # Upload/Replace catalogue CSV (session-only)
+        st.markdown("### Upload / Replace catalogue CSV (session-only)")
+        up = st.file_uploader("Upload a full catalogue CSV (UTF-8). Not persisted on redeploy.", type=["csv"], key="diag_upload_catalogue")
+        if up is not None:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            with open(DATA_DIR / "ajd_catalogue_raw.csv", "wb") as f:
+                f.write(up.getbuffer())
+            load_catalogue_df.clear()
+            st.success("Uploaded. Click **Reload data / clear cache** in the sidebar, then reopen Diagnostics.")
+
+        # Maintenance
+        st.markdown("### Maintenance")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Force re-merge from parts (ajd_catalogue_raw.part*.csv)"):
+                merged = DATA_DIR / "ajd_catalogue_raw.csv"
+                try:
+                    if merged.exists():
+                        merged.unlink()
+                    ok = _merge_chunked_csv(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"), merged)
+                    load_catalogue_df.clear()
+                    if ok:
+                        st.success("Re-merged successfully. Click **Reload data / clear cache** in the sidebar.")
+                    else:
+                        st.warning("No part files found matching pattern.")
+                except Exception as e:
+                    st.error(f"Re-merge failed: {e}")
+        with c2:
+            if st.button("Show part files"):
+                st.write(sorted(glob.glob(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"))))
 
     st.markdown("---")
     st.caption("© 2025 ICON Studio — AJD Topic Explorer Dashboard. Add `streamlit` to requirements.txt and run: `streamlit run app.py`")
