@@ -25,6 +25,7 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
                     out.write(f.read())
     return True
 
+
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
     topics_csv = DATA_DIR / "ajd_topics_extracted.csv"
@@ -34,36 +35,68 @@ def load_topics_df() -> pd.DataFrame:
         df = pd.read_csv(topics_csv)
         cols = [c.strip().lower() for c in df.columns]
         if "topic" in cols and "count" in cols:
-            df = df.rename(columns={df.columns[cols.index("topic")]: "topic",
-                                    df.columns[cols.index("count")]: "count"})
+            df = df.rename(columns={
+                df.columns[cols.index("topic")]: "topic",
+                df.columns[cols.index("count")]: "count"
+            })
             return df[["topic", "count"]]
         if len(df.columns) >= 2:
             return df.rename(columns={df.columns[0]: "topic", df.columns[1]: "count"})[["topic", "count"]]
     return pd.DataFrame(columns=["topic", "count"])
 
+
 @st.cache_data(show_spinner=False)
 def load_catalogue_df() -> pd.DataFrame:
+    """
+    Robust loader: auto-merge parts; try multiple encodings & delimiters; clean columns/rows.
+    """
     cat_csv = DATA_DIR / "ajd_catalogue_raw.csv"
     if not cat_csv.exists():
         _merge_chunked_csv(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"), cat_csv)
-    if cat_csv.exists():
-        return pd.read_csv(cat_csv)
-    return pd.DataFrame()
 
-@st.cache_data(show_spinner=False)
-def infer_text_columns(df: pd.DataFrame) -> List[str]:
-    patt = re.compile(r"(title|synopsis|summary|topic|subject|tags|genre|theme|series|strand|category|type|desc|name|english|arabic)", re.I)
-    return [c for c in df.columns if patt.search(str(c))]
+    if not cat_csv.exists():
+        return pd.DataFrame()
 
-@st.cache_data(show_spinner=False)
-def tfidf_similarities(ajd_texts: List[str], proj_texts: List[str], min_df: int = 2) -> Tuple[pd.DataFrame, List[int]]:
-    corpus = ajd_texts + proj_texts
-    vectorizer = TfidfVectorizer(min_df=min_df, ngram_range=(1, 2))
-    X = vectorizer.fit_transform(corpus)
-    n_ajd = len(ajd_texts)
-    sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
-    return pd.DataFrame(sim), list(range(n_ajd))
+    encodings = ["utf-8", "utf-8-sig", "cp1256", "latin1"]
+    seps = [None, ",", ";", "\t", "|"]  # None = let pandas sniff
+    last_err = None
+    df = None
 
+    for enc in encodings:
+        for sep in seps:
+            try:
+                df = pd.read_csv(
+                    cat_csv,
+                    sep=sep,
+                    encoding=enc,
+                    engine="python",
+                    dtype=str,
+                    na_filter=False,
+                    keep_default_na=False,
+                    on_bad_lines="skip",
+                )
+                if df is not None and df.shape[0] > 0:
+                    break
+            except Exception as e:
+                last_err = e
+        if df is not None and df.shape[0] > 0:
+            break
+
+    if df is None:
+        st.error(f"Could not read catalogue CSV. Last error: {last_err}")
+        return pd.DataFrame()
+
+    # Clean column names (trim / collapse spaces)
+    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
+
+    # Drop fully empty columns and rows
+    df = df.dropna(axis=1, how="all")
+    df = df.loc[~(df.apply(lambda r: "".join(map(str, r)).strip(), axis=1) == "")]
+
+    # Show shape for quick verification
+    st.sidebar.write(f"Loaded catalogue: {df.shape[0]:,} rows × {df.shape[1]} cols")
+
+    return df
 # ---------------- app ----------------
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
