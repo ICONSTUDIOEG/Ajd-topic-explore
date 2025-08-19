@@ -148,108 +148,27 @@ def main() -> None:
     ])
 
     # ----- TAB 1: Search -----
-    with search_tab:
-        st.subheader("Search AJD Catalogue")
-        cat_df = load_catalogue_df()
-        if cat_df.empty:
-            st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
-        else:
-            # Use preset from Diagnostics if available
-            text_cols_default = infer_text_columns(cat_df)
-            preset = st.session_state.get("diag_cols_preset")
-            default_cols = preset if (preset and all(c in cat_df.columns for c in preset)) else (text_cols_default or list(cat_df.columns)[:5])
+    # Use preset from Diagnostics if available
+text_cols_default = infer_text_columns(cat_df)
+preset = st.session_state.get("diag_cols_preset")
+default_cols = preset if (preset and all(c in cat_df.columns for c in preset)) else (text_cols_default or list(cat_df.columns)[:5])
 
-            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=default_cols)
-            search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
-            fallback_combine = st.checkbox("Fallback: combine selected columns into one field", value=True)
+cols = st.multiselect(
+    "Columns to search in:",
+    options=list(cat_df.columns),
+    default=default_cols,
+    key="search_cols",
+)
+search_all = st.checkbox("Search ALL columns (ignore selection)", value=False, key="search_all")
+fallback_combine = st.checkbox("Fallback: combine selected columns into one field", value=True, key="search_fallback")
 
-            q = st.text_input("Keyword or phrase")
-            mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
-            max_rows = st.slider("Max rows to show", 10, 2000, 200)
+q = st.text_input("Keyword or phrase", key="search_q")
+mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0, key="search_mode")
+max_rows = st.slider("Max rows to show", 10, 2000, 200, key="search_max_rows")
 
-            # Clean hidden zero-width/RTL chars and whitespace
-            import re as _re
-            ZW_PATTERN = _re.compile(r"[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
-            WS_PATTERN = _re.compile(r"\s+")
-
-            def clean_hidden(s: str) -> str:
-                if not isinstance(s, str):
-                    s = str(s)
-                s = ZW_PATTERN.sub("", s)
-                s = WS_PATTERN.sub(" ", s).strip()
-                return s
-
-            # Quick Probe
-            if st.button("Quick Probe (per-column matches)"):
-                if not q:
-                    st.warning("Enter a query first.")
-                else:
-                    use_cols = list(cat_df.columns) if search_all or not cols else cols
-                    out = []
-                    nonempty = []
-                    for c in use_cols:
-                        s = cat_df[c].astype(str).fillna("").map(clean_hidden)
-                        try:
-                            if mode == "Contains (case-insensitive)":
-                                n = s.str.contains(q, case=False, na=False, regex=False).sum()
-                            elif mode == "Exact (case-insensitive)":
-                                n = (s.str.strip().str.lower() == q.strip().lower()).sum()
-                            else:
-                                n = s.str.contains(q, case=False, na=False, regex=True).sum()
-                        except Exception:
-                            n = 0
-                        out.append((c, int(n)))
-                        nonempty.append((c, int((s != "").sum())))
-                    st.write("**Matches per column (top 25):**")
-                    st.dataframe(pd.DataFrame(out, columns=["column","matches"]).sort_values("matches", ascending=False).head(25), use_container_width=True)
-                    st.write("**Non-empty cells per column (top 25):**")
-                    st.dataframe(pd.DataFrame(nonempty, columns=["column","non_empty"]).sort_values("non_empty", ascending=False).head(25), use_container_width=True)
-
-            # Search
-            if st.button("Search", type="primary"):
-                if not q:
-                    st.warning("Provide a query.")
-                else:
-                    try:
-                        use_cols = list(cat_df.columns) if search_all or not cols else cols
-                        df = cat_df.copy()
-                        for c in use_cols:
-                            df[c] = df[c].astype(str).fillna("").map(clean_hidden)
-
-                        if fallback_combine:
-                            combo = df[use_cols].agg(" ".join, axis=1)
-                            if mode == "Contains (case-insensitive)":
-                                mask = combo.str.contains(q, case=False, na=False, regex=False)
-                            elif mode == "Exact (case-insensitive)":
-                                mask = (combo.str.strip().str.lower() == q.strip().lower())
-                            else:
-                                mask = combo.str.contains(q, case=False, na=False, regex=True)
-                        else:
-                            mask = pd.Series(False, index=df.index)
-                            for c in use_cols:
-                                s = df[c]
-                                if mode == "Contains (case-insensitive)":
-                                    mask |= s.str.contains(q, case=False, na=False, regex=False)
-                                elif mode == "Exact (case-insensitive)":
-                                    mask |= (s.str.strip().str.lower() == q.strip().lower())
-                                else:
-                                    mask |= s.str.contains(q, case=False, na=False, regex=True)
-
-                        total = int(mask.sum())
-                        res = df[mask].head(max_rows)
-                        st.success(f"Found {total:,} rows; showing {len(res):,}.")
-                        if total == 0:
-                            st.info("No matches. Use Quick Probe, try Search ALL columns, or switch modes.")
-                        if not res.empty:
-                            show_cols = use_cols if len(use_cols) <= 12 else use_cols[:12]
-                            st.write("**Sample hits (chosen columns):**")
-                            st.dataframe(res[show_cols].head(20), use_container_width=True)
-                            st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
-                                               file_name="ajd_search_results.csv", mime="text/csv")
-                        else:
-                            st.dataframe(res, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Search error: {e}")
+# Buttons with keys (prevents collisions after hot-reload)
+quick_probe_clicked = st.button("Quick Probe (per-column matches)", key="search_quick_probe_btn")
+search_clicked = st.button("Search", type="primary", key="search_go_btn")
 
     # ----- TAB 2: Topic Overlap -----
     with compare_tab:
