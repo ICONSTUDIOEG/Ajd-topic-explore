@@ -100,100 +100,146 @@ def main() -> None:
     ])
     search_tab, compare_tab, similar_tab, logline_tab, diag_tab = tabs
 
-          # ---------------- TAB 1: Search ----------------
-    with search_tab:
-        st.subheader("Search AJD Catalogue")
-        cat_df = load_catalogue_df()
-        if cat_df.empty:
-            st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
-        else:
-            text_cols_default = infer_text_columns(cat_df)
-            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default)
-            search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
+   # ---------------- TAB 1: Search ----------------
+with search_tab:
+    st.subheader("Search AJD Catalogue")
+    cat_df = load_catalogue_df()
+    if cat_df.empty:
+        st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
+    else:
+        text_cols_default = infer_text_columns(cat_df)
+        cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default)
+        search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
 
-            q = st.text_input("Keyword or phrase")
-            mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
-            normalize_ar = st.checkbox("Normalize Arabic (diacritics + alef/ya)", value=True)
-            strip_punct = st.checkbox("Strip punctuation", value=True)
-            max_rows = st.slider("Max rows to show", 10, 2000, 200)
+        q = st.text_input("Keyword or phrase")
+        mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
+        normalize_ar = st.checkbox("Normalize Arabic (diacritics + alef/ya)", value=True)
+        strip_punct = st.checkbox("Strip punctuation", value=True)
+        max_rows = st.slider("Max rows to show", 10, 2000, 200)
 
-            # --- helpers (no extra indent) ---
-            import unicodedata, string
+        # --- helpers ---
+        import unicodedata, string
 
-            def ar_norm(s: str) -> str:
-                if not isinstance(s, str):
-                    s = str(s)
-                s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
-                s = (s
-                    .replace("أ","ا").replace("إ","ا").replace("آ","ا")   # alef forms -> ا
-                    .replace("ى","ي")                                    # alif maqṣūra -> ي
-                    .replace("ئ","ي")                                    # hamza on ya -> ي
-                    .replace("ؤ","و"))                                   # hamza on waw -> و
-                return s
+        def ar_norm(s: str) -> str:
+            if not isinstance(s, str):
+                s = str(s)
+            # remove diacritics
+            s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+            # unify letters (one direction only)
+            s = (s
+                 .replace("أ","ا").replace("إ","ا").replace("آ","ا")  # alef forms -> ا
+                 .replace("ى","ي")                                   # alif maqṣūra -> ي
+                 .replace("ئ","ي")                                   # hamza on ya -> ي
+                 .replace("ؤ","و"))                                  # hamza on waw -> و
+            # keep ta marbuta as "ة" (do NOT map to ه)
+            return s
 
-            def sanitize(s: str) -> str:
-                if not isinstance(s, str):
-                    s = str(s)
-                if normalize_ar:
-                    s = ar_norm(s)
-                if strip_punct:
-                    s = s.translate(str.maketrans("", "", string.punctuation))
-                return s
+        def sanitize(s: str) -> str:
+            if not isinstance(s, str):
+                s = str(s)
+            t = s
+            if normalize_ar:
+                t = ar_norm(t)
+            if strip_punct:
+                t = t.translate(str.maketrans("", "", string.punctuation))
+            return t
 
-            # ---------- search ----------
-            if st.button("Search", type="primary"):
-                if not q:
-                    st.warning("Provide a query.")
-                else:
+        # ---------- Quick Probe (per-column matches) ----------
+        if st.button("Quick Probe (per-column matches)"):
+            if not q:
+                st.warning("Enter a query first.")
+            else:
+                probe_cols = list(cat_df.columns) if search_all or not cols else cols
+                q_raw = q
+                q_norm = sanitize(q).strip().lower() if (normalize_ar or strip_punct) else None
+                hits = []
+                for c in probe_cols:
+                    s = cat_df[c].astype(str).fillna("")
+                    # raw path
                     try:
-                        use_cols = list(cat_df.columns) if search_all or not cols else cols
-                        mask = pd.Series(False, index=cat_df.index)
+                        if mode == "Contains (case-insensitive)":
+                            raw_n = s.str.contains(q_raw, case=False, na=False, regex=False).sum()
+                        elif mode == "Exact (case-insensitive)":
+                            raw_n = (s.str.strip().str.lower() == q_raw.strip().lower()).sum()
+                        else:
+                            raw_n = s.str.contains(q_raw, case=False, na=False, regex=True).sum()
+                    except Exception:
+                        raw_n = 0
+                    # normalized path (optional)
+                    if q_norm is not None:
+                        s2 = s.apply(sanitize).str.lower()
+                        try:
+                            if mode == "Contains (case-insensitive)":
+                                norm_n = s2.str.contains(q_norm, na=False, regex=False).sum()
+                            elif mode == "Exact (case-insensitive)":
+                                norm_n = (s2.str.strip() == q_norm).sum()
+                            else:
+                                norm_n = s2.str.contains(q_norm, na=False, regex=True).sum()
+                        except Exception:
+                            norm_n = 0
+                        total_n = int(raw_n + norm_n) if raw_n != norm_n else int(max(raw_n, norm_n))
+                    else:
+                        total_n = int(raw_n)
+                    hits.append((c, total_n))
+                probe_df = pd.DataFrame(hits, columns=["column", "matches"]).sort_values("matches", ascending=False)
+                st.write("**Matches per column** (top 25):")
+                st.dataframe(probe_df.head(25), use_container_width=True)
 
-                        q_raw = q
-                        q_norm = sanitize(q).strip().lower() if (normalize_ar or strip_punct) else None
+        # ---------- Search ----------
+        if st.button("Search", type="primary"):
+            if not q:
+                st.warning("Provide a query.")
+            else:
+                try:
+                    use_cols = list(cat_df.columns) if search_all or not cols else cols
+                    mask = pd.Series(False, index=cat_df.index)
 
-                        for c in use_cols:
-                            s = cat_df[c].astype(str).fillna("")
+                    q_raw = q
+                    q_norm = sanitize(q).strip().lower() if (normalize_ar or strip_punct) else None
 
-                            # RAW match
+                    for c in use_cols:
+                        s = cat_df[c].astype(str).fillna("")
+
+                        # RAW match
+                        try:
                             if mode == "Contains (case-insensitive)":
                                 raw_hits = s.str.contains(q_raw, case=False, na=False, regex=False)
                             elif mode == "Exact (case-insensitive)":
-                                raw_hits = s.str.strip().str.lower() == q_raw.strip().lower()
+                                raw_hits = (s.str.strip().str.lower() == q_raw.strip().lower())
                             else:
                                 raw_hits = s.str.contains(q_raw, case=False, na=False, regex=True)
+                        except Exception:
+                            raw_hits = pd.Series(False, index=s.index)
 
-                            # NORMALIZED match (optional)
-                            if q_norm is not None:
-                                s_norm = s.apply(sanitize).str.lower()
-                                try:
-                                    if mode == "Contains (case-insensitive)":
-                                        norm_hits = s_norm.str.contains(q_norm, na=False, regex=False)
-                                    elif mode == "Exact (case-insensitive)":
-                                        norm_hits = (s_norm.str.strip() == q_norm)
-                                    else:
-                                        norm_hits = s_norm.str.contains(q_norm, na=False, regex=True)
-                                except Exception:
-                                    norm_hits = pd.Series(False, index=s.index)
-                                combined = raw_hits | norm_hits
-                            else:
-                                combined = raw_hits
+                        # NORMALIZED match (optional)
+                        if q_norm is not None:
+                            s_norm = s.apply(sanitize).str.lower()
+                            try:
+                                if mode == "Contains (case-insensitive)":
+                                    norm_hits = s_norm.str.contains(q_norm, na=False, regex=False)
+                                elif mode == "Exact (case-insensitive)":
+                                    norm_hits = (s_norm.str.strip() == q_norm)
+                                else:
+                                    norm_hits = s_norm.str.contains(q_norm, na=False, regex=True)
+                            except Exception:
+                                norm_hits = pd.Series(False, index=s.index)
+                            combined = raw_hits | norm_hits
+                        else:
+                            combined = raw_hits
 
-                            mask |= combined
+                        mask |= combined
 
-                        total = int(mask.sum())
-                        res = cat_df[mask].head(max_rows)
-                        st.success(f"Found {total:,} rows; showing {len(res):,}.")
-                        if total == 0:
-                            st.info("No matches. Try Search ALL columns, toggle normalization, or switch modes.")
-                        st.dataframe(res, use_container_width=True)
-                        if not res.empty:
-                            st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
-                                               file_name="ajd_search_results.csv", mime="text/csv")
-                    except Exception as e:
-                        st.error(f"Search error: {e}")
-
-
+                    total = int(mask.sum())
+                    res = cat_df[mask].head(max_rows)
+                    st.success(f"Found {total:,} rows; showing {len(res):,}.")
+                    if total == 0:
+                        st.info("No matches. Use Quick Probe, try Search ALL columns, toggle normalization, or switch modes.")
+                    st.dataframe(res, use_container_width=True)
+                    if not res.empty:
+                        st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
+                                           file_name="ajd_search_results.csv", mime="text/csv")
+                except Exception as e:
+                    st.error(f"Search error: {e}")
 
     # ---------------- TAB 2: Topic Overlap ----------------
     with compare_tab:
