@@ -1,4 +1,12 @@
-English Name,English Synopsis,Series Name
-Voices of the Nile,A documentary about the people living along the Nile River.,Heritage Series
-Digital Dreams,Exploring how technology is reshaping lives in the Middle East.,Future Frontiers
-Lost Crafts,Following artisans who preserve ancient traditions in a modern world.,Culture Stories
+# Put this inside the Diagnostics tab, under the existing previews:
+
+st.markdown("### Upload/Replace catalogue CSV (session-only)")
+up = st.file_uploader("Upload your full catalogue CSV", type=["csv"])
+if up is not None:
+    import os
+    os.makedirs(DATA_DIR, exist_ok=True)
+    out_path = DATA_DIR / "ajd_catalogue_raw.csv"
+    with open(out_path, "wb") as f:
+        f.write(up.getbuffer())
+    load_catalogue_df.clear()  # clear cache
+    st.success(f"Saved to {out_path}. Click 'Reload data / clear cache' in the sidebar, then re-open Diagnostics.")
