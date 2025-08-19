@@ -1,4 +1,6 @@
-import re, json, glob
+import re
+import json
+import glob
 from pathlib import Path
 from typing import List, Tuple
 
@@ -25,6 +27,7 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
                     out.write(f.read())
     return True
 
+
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
     topics_csv = DATA_DIR / "ajd_topics_extracted.csv"
@@ -46,11 +49,10 @@ def load_topics_df() -> pd.DataFrame:
             })[["topic", "count"]]
     return pd.DataFrame(columns=["topic", "count"])
 
+
 @st.cache_data(show_spinner=False)
 def load_catalogue_df() -> pd.DataFrame:
-    """
-    Robust loader: auto-merge parts; try multiple encodings & delimiters; clean columns/rows.
-    """
+    # Robust loader: auto-merge parts; try multiple encodings & delimiters; clean columns/rows.
     cat_csv = DATA_DIR / "ajd_catalogue_raw.csv"
     if not cat_csv.exists():
         _merge_chunked_csv(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"), cat_csv)
@@ -94,10 +96,27 @@ def load_catalogue_df() -> pd.DataFrame:
     df = df.dropna(axis=1, how="all")
     df = df.loc[~(df.apply(lambda r: "".join(map(str, r)).strip(), axis=1) == "")]
 
-    # Show shape for quick verification
+    # Sidebar quick shape
     st.sidebar.write(f"Loaded catalogue: {df.shape[0]:,} rows × {df.shape[1]} cols")
 
     return df
+
+
+@st.cache_data(show_spinner=False)
+def infer_text_columns(df: pd.DataFrame) -> List[str]:
+    patt = re.compile(r"(title|synopsis|summary|topic|subject|tags|genre|theme|series|strand|category|type|desc|name|english|arabic)", re.I)
+    return [c for c in df.columns if patt.search(str(c))]
+
+
+@st.cache_data(show_spinner=False)
+def tfidf_similarities(ajd_texts: List[str], proj_texts: List[str], min_df: int = 2) -> Tuple[pd.DataFrame, List[int]]:
+    corpus = ajd_texts + proj_texts
+    vectorizer = TfidfVectorizer(min_df=min_df, ngram_range=(1, 2))
+    X = vectorizer.fit_transform(corpus)
+    n_ajd = len(ajd_texts)
+    sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
+    return pd.DataFrame(sim), list(range(n_ajd))
+
 
 # ---------------- app ----------------
 def main() -> None:
@@ -126,58 +145,66 @@ def main() -> None:
     # ---------------- TAB 1: Search ----------------
     with search_tab:
         st.subheader("Search AJD Catalogue")
-        @st.cache_data(show_spinner=False)
-def load_catalogue_df() -> pd.DataFrame:
-    """
-    Robust loader: auto-merge parts; try multiple encodings & delimiters; clean columns/rows.
-    """
-    cat_csv = DATA_DIR / "ajd_catalogue_raw.csv"
-    if not cat_csv.exists():
-        _merge_chunked_csv(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"), cat_csv)
+        cat_df = load_catalogue_df()
+        if cat_df.empty:
+            st.info("Upload/commit your catalogue CSV parts to `data/` and reload.")
+        else:
+            text_cols_default = infer_text_columns(cat_df)
+            cols = st.multiselect("Columns to search in:", options=list(cat_df.columns), default=text_cols_default)
+            search_all = st.checkbox("Search ALL columns (ignore selection)", value=False)
+            q = st.text_input("Keyword or phrase")
+            mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0)
+            max_rows = st.slider("Max rows to show", 10, 2000, 200)
 
-    if not cat_csv.exists():
-        return pd.DataFrame()
+            # Quick Probe (per-column matches)
+            if st.button("Quick Probe (per-column matches)"):
+                if not q:
+                    st.warning("Enter a query first.")
+                else:
+                    use_cols = list(cat_df.columns) if search_all or not cols else cols
+                    out = []
+                    for c in use_cols:
+                        s = cat_df[c].astype(str).fillna("")
+                        try:
+                            if mode == "Contains (case-insensitive)":
+                                n = s.str.contains(q, case=False, na=False, regex=False).sum()
+                            elif mode == "Exact (case-insensitive)":
+                                n = (s.str.strip().str.lower() == q.strip().lower()).sum()
+                            else:
+                                n = s.str.contains(q, case=False, na=False, regex=True).sum()
+                        except Exception:
+                            n = 0
+                        out.append((c, int(n)))
+                    st.dataframe(pd.DataFrame(out, columns=["column","matches"]).sort_values("matches", ascending=False).head(25), use_container_width=True)
 
-    # Try multiple encodings and delimiters
-    encodings = ["utf-8", "utf-8-sig", "cp1256", "latin1"]
-    seps = [None, ",", ";", "\t", "|"]  # None = let pandas sniff
-    last_err = None
-    df = None
-    for enc in encodings:
-        for sep in seps:
-            try:
-                df = pd.read_csv(
-                    cat_csv,
-                    sep=sep,
-                    encoding=enc,
-                    engine="python",
-                    dtype=str,              # keep text as strings
-                    na_filter=False,        # don't auto-convert to NaN
-                    keep_default_na=False,  # treat 'NA' as literal
-                    on_bad_lines="skip",
-                )
-                if df is not None and df.shape[0] > 0:
-                    break
-            except Exception as e:
-                last_err = e
-        if df is not None and df.shape[0] > 0:
-            break
+            # Search
+            if st.button("Search", type="primary"):
+                if not q:
+                    st.warning("Provide a query.")
+                else:
+                    try:
+                        use_cols = list(cat_df.columns) if search_all or not cols else cols
+                        mask = pd.Series(False, index=cat_df.index)
+                        for c in use_cols:
+                            s = cat_df[c].astype(str).fillna("")
+                            if mode == "Contains (case-insensitive)":
+                                mask |= s.str.contains(q, case=False, na=False, regex=False)
+                            elif mode == "Exact (case-insensitive)":
+                                mask |= (s.str.strip().str.lower() == q.strip().lower())
+                            else:
+                                mask |= s.str.contains(q, case=False, na=False, regex=True)
+                        total = int(mask.sum())
+                        res = cat_df[mask].head(max_rows)
+                        st.success(f"Found {total:,} rows; showing {len(res):,}.")
+                        if total == 0:
+                            st.info("No matches. Use Quick Probe, try Search ALL columns, or switch modes.")
+                        st.dataframe(res, use_container_width=True)
+                        if not res.empty:
+                            st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
+                                               file_name="ajd_search_results.csv", mime="text/csv")
+                    except Exception as e:
+                        st.error(f"Search error: {e}")
 
-    if df is None:
-        st.error(f"Could not read catalogue CSV. Last error: {last_err}")
-        return pd.DataFrame()
-
-    # Clean column names (trim / collapse spaces)
-    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
-
-    # Drop fully empty columns and rows
-    df = df.dropna(axis=1, how="all")
-    df = df.loc[~(df.apply(lambda r: "".join(map(str, r)).strip(), axis=1) == "")]
-
-    # Show shape for quick verification
-    st.sidebar.write(f"Loaded catalogue: {df.shape[0]:,} rows × {df.shape[1]} cols")
-
-    return df
     # ---------------- TAB 2: Topic Overlap ----------------
     with compare_tab:
         st.subheader("Compare Your Project Topics vs AJD Topics")
@@ -249,12 +276,7 @@ def load_catalogue_df() -> pd.DataFrame:
                     films_data = json.loads(films)
                     proj_texts = [(i.get("title","Untitled"), (i.get("title","")+" "+i.get("description"," ")).strip()) for i in films_data]
                     ajd_texts = (cat_df[cols].fillna("").astype(str).agg(" ".join, axis=1)).tolist()
-                    vectorizer = TfidfVectorizer(min_df=2, ngram_range=(1, 2))
-                    X = vectorizer.fit_transform(ajd_texts + [t for _, t in proj_texts])
-                    n_ajd = len(ajd_texts)
-                    from sklearn.metrics.pairwise import cosine_similarity
-                    sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
-                    sim_df = pd.DataFrame(sim)
+                    sim_df, _ = tfidf_similarities(ajd_texts, [t for _, t in proj_texts])
                     for row_idx, (title, _) in enumerate(proj_texts):
                         st.markdown(f"#### {title}")
                         sims = sim_df.iloc[row_idx].values
@@ -302,28 +324,36 @@ def load_catalogue_df() -> pd.DataFrame:
 
     # ---------------- TAB 5: Diagnostics ----------------
     with diag_tab:
-    st.subheader("Diagnostics")
+        st.subheader("Diagnostics")
+        files = sorted(glob.glob(str(DATA_DIR / "*")))
+        st.write("**/data files**:", files)
+        p_topics = DATA_DIR / "ajd_topics_extracted.csv"
+        p_cat = DATA_DIR / "ajd_catalogue_raw.csv"
+        if p_cat.exists():
+            st.write(f"Catalogue file size: {p_cat.stat().st_size:,} bytes")
+        else:
+            st.info("Catalogue merged CSV missing")
+        # Reload preview (robust loader)
+        cat_df_preview = load_catalogue_df()
+        st.write(f"Catalogue DataFrame shape: {cat_df_preview.shape[0]:,} rows × {cat_df_preview.shape[1]} cols")
+        if not cat_df_preview.empty:
+            st.write("**Column names (first 30):**", list(cat_df_preview.columns[:30]))
+            st.write("**Head(10):**")
+            st.dataframe(cat_df_preview.head(10), use_container_width=True)
+            texty = [c for c in cat_df_preview.columns if re.search(r"(name|title|synopsis|series|english|arabic|desc|topic)", c, re.I)]
+            st.write("**Guessed text columns:**", texty if texty else "(none)")
+        else:
+            st.warning("DataFrame is empty after loading. This usually means delimiter/encoding issues or an empty file.")
+        # Topics preview
+        if p_topics.exists():
+            st.write("Topics head:")
+            st.dataframe(pd.read_csv(p_topics).head(10))
+        else:
+            st.info("Topics merged CSV missing")
 
-    files = sorted(glob.glob(str(DATA_DIR / "*")))
-    st.write("**/data files**:", files)
+    st.markdown("---")
+    st.caption("© 2025 ICON Studio — AJD Topic Explorer Dashboard. Add `streamlit` to requirements.txt and run: `streamlit run app.py`")
 
-    p_cat = DATA_DIR / "ajd_catalogue_raw.csv"
-    if p_cat.exists():
-        st.write(f"Catalogue file size: {p_cat.stat().st_size:,} bytes")
-    else:
-        st.info("Catalogue merged CSV missing")
 
-    # Reload with our robust loader and show summary
-    cat_df_preview = load_catalogue_df()
-    st.write(f"Catalogue DataFrame shape: {cat_df_preview.shape[0]:,} rows × {cat_df_preview.shape[1]} cols")
-
-    if not cat_df_preview.empty:
-        st.write("**Column names (first 30):**", list(cat_df_preview.columns[:30]))
-        st.write("**Head(10):**")
-        st.dataframe(cat_df_preview.head(10), use_container_width=True)
-
-        # Show which columns look texty
-        texty = [c for c in cat_df_preview.columns if re.search(r"(name|title|synopsis|series|english|arabic|desc|topic)", c, re.I)]
-        st.write("**Guessed text columns:**", texty if texty else "(none)")
-    else:
-        st.warning("DataFrame is empty after loading. This usually means delimiter/encoding issues or an empty file.")
+if __name__ == "__main__":
+    main()
