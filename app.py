@@ -148,7 +148,7 @@ def main() -> None:
     ])
 
     # ----- TAB 1: Search -----
-    # Use preset from Diagnostics if available
+   # Use preset from Diagnostics if available
 text_cols_default = infer_text_columns(cat_df)
 preset = st.session_state.get("diag_cols_preset")
 default_cols = preset if (preset and all(c in cat_df.columns for c in preset)) else (text_cols_default or list(cat_df.columns)[:5])
