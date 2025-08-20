@@ -139,8 +139,8 @@ def main() -> None:
 
         # Reset UI state to avoid Streamlit KeyError on widget changes
         if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
-            st.session_state.clear()
-            st.experimental_rerun()
+    st.session_state.clear()
+    st.rerun()
 
         if st.button("Reload data / clear cache", key="sb_reload"):
             load_topics_df.clear(); load_catalogue_df.clear(); infer_text_columns.clear(); tfidf_similarities.clear()
