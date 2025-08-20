@@ -129,24 +129,28 @@ def main() -> None:
     st.title(APP_TITLE)
     st.caption("Search the Al Jazeera Documentary catalogue, compare your projects, and get stronger loglines.")
 
-    # ----- Sidebar -----
-    with st.sidebar:
-        st.header("Dataset")
-        topics_df = load_topics_df()
-        cat_df = load_catalogue_df()
-        st.write("**Topics**", f"{len(topics_df):,} rows" if not topics_df.empty else "— missing")
-        st.write("**Catalogue**", f"{len(cat_df):,} rows" if not cat_df.empty else "— missing")
+   # ----- Sidebar -----
+with st.sidebar:
+    st.header("Dataset")
+    topics_df = load_topics_df()
+    cat_df = load_catalogue_df()
+    st.write("**Topics**", f"{len(topics_df):,} rows" if not topics_df.empty else "— missing")
+    st.write("**Catalogue**", f"{len(cat_df):,} rows" if not cat_df.empty else "— missing")
 
-        # Reset UI state to avoid Streamlit KeyError on widget changes
-        if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
-    st.session_state.clear()
-    st.rerun()
+    # Reset UI state to avoid Streamlit KeyError on widget changes
+    if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
+        st.session_state.clear()
+        st.rerun()
 
-        if st.button("Reload data / clear cache", key="sb_reload"):
-            load_topics_df.clear(); load_catalogue_df.clear(); infer_text_columns.clear(); tfidf_similarities.clear()
-            st.rerun()
-        if topics_df.empty or cat_df.empty:
-            st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
+    if st.button("Reload data / clear cache", key="sb_reload"):
+        load_topics_df.clear()
+        load_catalogue_df.clear()
+        infer_text_columns.clear()
+        tfidf_similarities.clear()
+        st.rerun()
+
+    if topics_df.empty or cat_df.empty:
+        st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
 
     # ----- Tabs (define BEFORE use) -----
     search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
