@@ -381,36 +381,148 @@ def main() -> None:
                     except Exception as e:
                         st.error(f"Invalid JSON or error computing similarities: {e}")
 
-    # ----- TAB 4: Logline Suggestions -----
-    with logline_tab:
-        st.subheader("Suggest Strong Loglines")
-        st.caption("Craft angles that feel fresh relative to AJD coverage.")
-        seed = st.text_area("Describe your film (topic, setting, main character, conflict) — a few lines.", key="log_seed")
-        pmpt_code = st.text_input("Optional prompt code (e.g., pmpt_...) to tag your session", value="", key="log_pmpt")
+   # ----- TAB 4: Logline Suggestions -----
+with logline_tab:
+    st.subheader("Suggest Strong Loglines")
+    st.caption("Commissioning-ready, one-sentence lines with tone, angle, and anti-cliché filters.")
 
-        def propose_loglines(seed_txt: str, n: int = 6) -> List[str]:
-            seed_txt = seed_txt.strip()
-            angles = [
-                ("Hidden History", "uncovers a buried past that reshapes the present."),
-                ("Personal Lens", "tells a national story through one family or character."),
-                ("System vs. Individual", "shows how policies collide with everyday survival."),
-                ("Vanishing Traditions", "captures a craft or custom at the edge of extinction."),
-                ("Unexpected Ally/Adversary", "pairs unlikely characters or groups in tension."),
-                ("Future Stakes", "connects today's choice to tomorrow's irreversible outcome."),
-            ]
-            return [f"{t}: In one line — {seed_txt} — a story where it {a}" for (t, a) in angles[:n]]
+    # Inputs
+    seed = st.text_area(
+        "Describe your film (topic, setting, main character, access, tension) — 2–5 lines.",
+        key="log_seed",
+        placeholder="Ex: A Cairo paramedic livestreams night shifts; the feed builds a following, but reveals a black-market oxygen ring and a choice that could cost him his license—or a life."
+    )
+    tone = st.selectbox("Tone / voice", ["Neutral", "Urgent", "Gritty", "Poetic"], index=1, key="log_tone")
+    angle_pack = st.multiselect(
+        "Angles to try",
+        [
+            "Character (inside-out)",
+            "System vs Individual",
+            "Investigation / Leak",
+            "Exclusive Access",
+            "Countdown / Clock",
+            "Paradox / Irony",
+            "Micro→Macro",
+            "David vs Goliath",
+            "Hidden Cost",
+            "Archival Reframe"
+        ],
+        default=["Character (inside-out)","System vs Individual","Investigation / Leak","Countdown / Clock"],
+        key="log_angles"
+    )
+    target_len = st.slider("Target words (tight = stronger)", 12, 28, 20, key="log_len")
+    n_variants = st.slider("How many variants?", 3, 12, 6, key="log_n")
+    anti_cliche = st.checkbox("Remove clichés (untold, explores, journey…)", value=True, key="log_anticliche")
 
-        gen_clicked = st.button("Generate loglines", type="primary", key="log_gen_btn")
-        if gen_clicked:
-            if not seed:
-                st.warning("Please enter a short seed description.")
+    # Optional: nudge freshness vs AJD catalogue (if loaded)
+    freshness_nudge = st.checkbox("Nudge for freshness vs common AJD framings", value=True, key="log_freshness")
+
+    def _strip_cliche(text: str) -> str:
+        if not anti_cliche:
+            return text
+        replacements = {
+            r"\buntold\b": "unreported",
+            r"\bnever[- ]before[- ]seen\b": "rarely seen",
+            r"\bexplores\b": "cuts into",
+            r"\bjourney\b": "fight",
+            r"\bshines a light on\b": "exposes",
+            r"\bsheds light on\b": "exposes",
+            r"\bdelves into\b": "drives into",
+            r"\bheart[- ]wrenching\b": "stark",
+            r"\bgripping\b": "high-stakes",
+            r"\bintimate portrait\b": "close-quarters view",
+        }
+        import re as _re
+        out = text
+        for pat, rep in replacements.items():
+            out = _re.sub(pat, rep, out, flags=_re.I)
+        return out
+
+    def _apply_tone(text: str, tone: str) -> str:
+        if tone == "Urgent":
+            # Add clock/stakes pressure
+            return text.replace(" — ", " — now, ").replace(";", ",") if " — " in text else text + " Now."
+        if tone == "Gritty":
+            return text.replace(" ", " ").replace("choice", "reckoning").replace("secret", "black-market").replace("network", "machine")
+        if tone == "Poetic":
+            return text.replace(" — ", ", ").replace(" vs ", " against ").replace("fight", "tremor").replace("exposes", "uncovers what we refuse to see")
+        return text
+
+    def _tighten(text: str, max_words: int) -> str:
+        words = text.split()
+        return " ".join(words[:max_words]).rstrip(",.;:") + "."
+
+    def _fresh_nudge(seed_txt: str, base: str) -> str:
+        if not freshness_nudge:
+            return base
+        # lightweight nudges: add specificity or unexpected POV
+        hints = [
+            " told through a single 36-hour window",
+            " anchored in one apartment block’s WhatsApp audio",
+            " using receipts, repair slips, and one leaked invoice",
+            " from the perspective of the least powerful person in the room",
+            " limited to places with no phone signal",
+            " where every claim must be proven on camera",
+        ]
+        # If already quite specific, keep as is
+        return base if any(k in base.lower() for k in ["36-hour","invoice","whatsapp","leaked","apartment","proven"]) else (base.rstrip(".") + hints[hash(seed_txt) % len(hints)] + ".")
+
+    # Angle templates
+    def _angles(seed_txt: str) -> list[tuple[str, str]]:
+        s = seed_txt.strip()
+        return [
+            ("Character (inside-out)", f"When {s} collides with a rule he can no longer obey, one decision rewrites the line between saving face and saving lives."),
+            ("System vs Individual",   f"A frontline worker trapped inside {s} tests how far a system will bend before it breaks—and who pays when it doesn’t."),
+            ("Investigation / Leak",   f"A leak cracks open {s}, and the paper trail forces a choice: expose the scheme or become another silent link."),
+            ("Exclusive Access",       f"Inside {s}, cameras stay rolling where they’re usually shut: what happens when the gatekeepers can’t edit the truth."),
+            ("Countdown / Clock",      f"In {s}, each hour raises the price of staying quiet—until the deadline hits and someone’s oxygen runs out."),
+            ("Paradox / Irony",        f"{s} turns fame into risk: the audience that makes the hero untouchable also makes him a target."),
+            ("Micro→Macro",            f"A tiny decision inside {s} maps the wiring of a bigger crisis—how small hands move a large machine."),
+            ("David vs Goliath",       f"Against {s}, one underpaid insider finds the only weapon Goliath can’t block: proof."),
+            ("Hidden Cost",            f"{s} looks cheaper than the fix—until the bill arrives in bodies, licenses, and sleep."),
+            ("Archival Reframe",       f"Using old calls, receipts and cached clips, {s} plays back a scandal that was hiding in plain sight.")
+        ]
+
+    def propose_loglines_v2(seed_txt: str, tones: str, packs: list[str], n: int, max_words: int) -> list[str]:
+        if not seed_txt.strip():
+            return []
+        pool = [p for p in _angles(seed_txt) if p[0] in packs] or _angles(seed_txt)
+        # Cycle through selected angles; cap to n
+        lines = []
+        i = 0
+        while len(lines) < n:
+            label, draft = pool[i % len(pool)]
+            # Build final line
+            out = draft
+            out = _strip_cliche(out)
+            out = _apply_tone(out, tones)
+            out = _fresh_nudge(seed_txt, out)
+            out = _tighten(out, max_words)
+            # ensure single sentence ending
+            if not out.endswith("."):
+                out += "."
+            lines.append(f"{out}")
+            i += 1
+        return lines
+
+    gen_clicked = st.button("Generate loglines", type="primary", key="log_gen_btn")
+    if gen_clicked:
+        if not seed.strip():
+            st.warning("Please add a short seed.")
+        else:
+            logs = propose_loglines_v2(seed, tone, angle_pack, n_variants, target_len)
+            if not logs:
+                st.info("No output. Try different angles or increase word target.")
             else:
-                logs = propose_loglines(seed)
                 for i, line in enumerate(logs, 1):
                     st.write(f"**{i}.** {line}")
-                st.download_button("Download loglines (.txt)",
-                    ("\n".join(logs)).encode("utf-8"),
-                    file_name=(f"loglines_{pmpt_code or 'untagged'}.txt"), key="log_dl")
+                st.download_button(
+                    "Download loglines (.txt)",
+                    ("\n".join([f"{i+1}. {x}" for i, x in enumerate(logs)])).encode("utf-8"),
+                    file_name="loglines_suggestions.txt",
+                    key="log_dl"
+                )
+
 
     # ----- TAB 5: Diagnostics -----
     with diag_tab:
