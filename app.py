@@ -156,27 +156,34 @@ def main() -> None:
     st.title(APP_TITLE)
     st.caption("Search the Al Jazeera Documentary catalogue, compare your projects, and get stronger loglines.")
 
-    # ----- Sidebar -----
-    with st.sidebar:
-        st.header("Dataset")
-        topics_df = load_topics_df()
-        cat_df = load_catalogue_df()
-        st.write("**Topics**", f"{len(topics_df):,} rows" if not topics_df.empty else "— missing")
-        st.write("**Catalogue**", f"{len(cat_df):,} rows" if not cat_df.empty else "— missing")
+   
+   # ----- Sidebar -----
+with st.sidebar:
+    st.header(L("Dataset", "البيانات"))
+    # Language switch
+    ui_lang = st.selectbox("Language / اللغة", ["English", "العربية"], key="sb_lang")
+    apply_rtl_if_arabic()
 
-        # Reset UI state to avoid Streamlit KeyError on widget changes
-        if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
-            st.session_state.clear()
-            st.rerun()
+    topics_df = load_topics_df()
+    cat_df = load_catalogue_df()
 
-        if st.button("Reload data / clear cache", key="sb_reload"):
-            load_topics_df.clear()
-            load_catalogue_df.clear()
-            infer_text_columns.clear()
-            st.rerun()
+    st.write(f"**{L('Topics','الموضوعات')}**", f"{len(topics_df):,} {L('rows','سطر')}" if not topics_df.empty else L("— missing","— غير متوفر"))
+    st.write(f"**{L('Catalogue','الفهرس')}**", f"{len(cat_df):,} {L('rows','سطر')}" if not cat_df.empty else L("— missing","— غير متوفر"))
 
-        if topics_df.empty or cat_df.empty:
-            st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
+    # Reset & Reload
+    if st.button(L("Reset UI state (fix KeyError)","إعادة ضبط واجهة المستخدم"), key="sb_reset_state"):
+        st.session_state.clear()
+        st.rerun()
+
+    if st.button(L("Reload data / clear cache","تحديث البيانات / مسح الذاكرة المؤقتة"), key="sb_reload"):
+        load_topics_df.clear(); load_catalogue_df.clear(); infer_text_columns.clear()
+        st.rerun()
+
+    if topics_df.empty or cat_df.empty:
+        st.warning(L(
+            "If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.",
+            "إذا كانت ملفات الدمج غير موجودة، سيقوم التطبيق بدمج `/data/...partNN.csv` في أول تشغيل."
+        ))
 
     # ----- Tabs (define BEFORE use) -----
     search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
@@ -409,13 +416,13 @@ def main() -> None:
    # ----- TAB 4: Logline Suggestions -----
 # --- ensure tabs exist before using logline_tab ---
 if "logline_tab" not in locals():
-    search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
-        "🔎 Search AJD Catalogue",
-        "🔁 Topic Overlap",
-        "🧭 Similarity Matches",
-        "🪄 Logline Suggestions",
-        "🧰 Diagnostics",
-    ])
+  search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
+    L("🔎 Search AJD Catalogue","🔎 البحث في فهرس AJD"),
+    L("🔁 Topic Overlap","🔁 تقاطع الموضوعات"),
+    L("🧭 Similarity Matches","🧭 أقرب تطابقات"),
+    L("🪄 Logline Suggestions","🪄 اقتراح لوجلاين"),
+    L("🧰 Diagnostics","🧰 التشخيص")
+])
 # ----- TAB 4: Logline Suggestions -----
 # (Place this exactly where your previous Loglines tab code was.)
 with logline_tab:
