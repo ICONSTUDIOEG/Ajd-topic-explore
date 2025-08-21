@@ -382,6 +382,15 @@ def main() -> None:
                         st.error(f"Invalid JSON or error computing similarities: {e}")
 
    # ----- TAB 4: Logline Suggestions -----
+# --- ensure tabs exist before using logline_tab ---
+if "logline_tab" not in locals():
+    search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
+        "🔎 Search AJD Catalogue",
+        "🔁 Topic Overlap",
+        "🧭 Similarity Matches",
+        "🪄 Logline Suggestions",
+        "🧰 Diagnostics",
+    ])
 with logline_tab:
     st.subheader("Suggest Strong Loglines")
     st.caption("Commissioning-ready, one-sentence lines with tone, angle, and anti-cliché filters.")
