@@ -16,6 +16,32 @@ except Exception:
 APP_TITLE = "AJD Topic Explorer — Search • Compare • Suggest"
 DATA_DIR = Path("data")
 
+# ====== Bilingual helpers ======
+def get_lang() -> str:
+    # read once; sidebar switch defines the session value
+    return st.session_state.get("sb_lang", "English")
+
+def L(en: str, ar: str) -> str:
+    return ar if get_lang() == "العربية" else en
+
+def apply_rtl_if_arabic():
+    if get_lang() == "العربية":
+        st.markdown(
+            """
+            <style>
+            html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] * {
+                direction: rtl;
+                text-align: right;
+                font-family: "Noto Naskh Arabic", "Amiri", "Tahoma", sans-serif !important;
+            }
+            /* Tweak tables so headers align nicely in RTL */
+            [data-testid="stTable"] thead tr th, [data-testid="stDataFrame"] thead tr th {
+                text-align: right !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 # ============================ Helpers ============================
 
 def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
@@ -37,7 +63,6 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
                     _ = f.readline()        # skip header
                     out.write(f.read())     # data only
     return True
-
 
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
