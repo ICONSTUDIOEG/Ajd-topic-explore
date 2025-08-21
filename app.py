@@ -148,7 +148,6 @@ def _clean_hidden_series(s: pd.Series) -> pd.Series:
     WS_PATTERN = _re.compile(r"\s+")
     return s.astype(str).fillna("").map(lambda x: WS_PATTERN.sub(" ", ZW_PATTERN.sub("", x)).strip())
 
-
 # ============================ App ============================
 
 def main() -> None:
@@ -420,7 +419,7 @@ if "logline_tab" not in locals():
     L("🔎 Search AJD Catalogue","🔎 البحث في فهرس AJD"),
     L("🔁 Topic Overlap","🔁 تقاطع الموضوعات"),
     L("🧭 Similarity Matches","🧭 أقرب تطابقات"),
-    L("🪄 Logline Suggestions","🪄 اقتراح لوجلاين"),
+    L("🪄 Logline Suggestions","🪄 اقتراحات للقصة"),
     L("🧰 Diagnostics","🧰 التشخيص")
 ])
 # ----- TAB 4: Logline Suggestions -----
@@ -665,30 +664,74 @@ with logline_tab:
                     key="log_dl",
                 )
 
-
     # ----- TAB 5: Diagnostics -----
     with diag_tab:
-        st.subheader("Diagnostics")
-        files = sorted(glob.glob(str(DATA_DIR / "*")))
-        st.write("**/data files**:", files)
+    st.subheader(L("Diagnostics","التشخيص"))
+    files = sorted(glob.glob(str(DATA_DIR / "*")))
+    st.write(L("**/data files**:","**ملفات /data**:"), files)
 
-        p_cat = DATA_DIR / "ajd_catalogue_raw.csv"
-        if p_cat.exists():
-            st.write(f"Catalogue file size: {p_cat.stat().st_size:,} bytes")
-        else:
-            st.info("Catalogue merged CSV missing")
+    p_cat = DATA_DIR / "ajd_catalogue_raw.csv"
+    if p_cat.exists():
+        st.write(L("Catalogue file size:","حجم ملف الفهرس:"), f"{p_cat.stat().st_size:,} {L('bytes','بايت')}")
+    else:
+        st.info(L("Catalogue merged CSV missing","ملف الفهرس الموحّد غير موجود"))
 
-        cat_df_preview = load_catalogue_df()
-        st.write(f"Catalogue DataFrame shape: {cat_df_preview.shape[0]:,} rows × {cat_df_preview.shape[1]} cols")
-        if not cat_df_preview.empty:
-            st.write("**Column names (first 30):**", list(cat_df_preview.columns[:30]))
-            st.write("**Head(10):**")
-            st.dataframe(cat_df_preview.head(10), use_container_width=True)
-            texty = [c for c in cat_df_preview.columns if re.search(r"(name|title|synopsis|series|english|arabic|desc|topic)", c, re.I)]
-            st.write("**Guessed text columns:**", texty if texty else "(none)")
-        else:
-            st.warning("DataFrame is empty after loading. This usually means delimiter/encoding issues or an empty file.")
+    cat_df_preview = load_catalogue_df()
+    st.write(L("Catalogue DataFrame shape:","أبعاد بيانات الفهرس:"), f"{cat_df_preview.shape[0]:,} × {cat_df_preview.shape[1]}")
+    if not cat_df_preview.empty:
+        st.write(L("**Column names (first 30):**","**أسماء الأعمدة (أول 30):**"), list(cat_df_preview.columns[:30]))
+        st.write(L("**Head(10):**","**أول 10 صفوف:**"))
+        st.dataframe(cat_df_preview.head(10), use_container_width=True)
+        texty = [c for c in cat_df_preview.columns if re.search(r"(name|title|synopsis|series|english|arabic|desc|topic|اسم|عنوان|ملخ|عربي|سلسلة|موضوع)", c, re.I)]
+        st.write(L("**Guessed text columns:**","**أعمدة نصية محتملة:**"), texty if texty else L("(none)","(لا يوجد)"))
+    else:
+        st.warning(L("DataFrame is empty after loading. This usually means delimiter/encoding issues or an empty file.",
+                     "البيانات فارغة بعد التحميل—غالبًا مشكلة فاصل/ترميز أو ملف فارغ."))
 
+    st.markdown(L("### Column preset for Search tab","### ضبط أعمدة البحث"))
+    if not cat_df_preview.empty:
+        _ = st.multiselect(
+            L("Columns to search in (preset for Search tab)","الأعمدة المراد البحث فيها (يُستخدم تلقائيًا)"),
+            options=list(cat_df_preview.columns),
+            default=texty or list(cat_df_preview.columns)[:5],
+            key="diag_cols_preset",
+        )
+        st.caption(L("This preset is saved in session; the Search tab will use it automatically.",
+                     "سيُحفظ هذا الإعداد في الجلسة؛ وسيستخدمه تبويب البحث تلقائيًا."))
+    else:
+        st.info(L("Load a catalogue first to configure the column preset.","حمّل الفهرس أولًا لضبط أعمدة البحث."))
+
+    st.markdown(L("### Upload / Replace catalogue CSV (session-only)","### رفع/استبدال ملف الفهرس (جلسة فقط)"))
+    up = st.file_uploader(L("Upload a full catalogue CSV (UTF-8). Not persisted on redeploy.",
+                            "ارفع ملف CSV كامل (UTF-8). لن يُحفظ بعد إعادة النشر."),
+                          type=["csv"], key="diag_upload_catalogue")
+    if up is not None:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(DATA_DIR / "ajd_catalogue_raw.csv", "wb") as f:
+            f.write(up.getbuffer())
+        load_catalogue_df.clear()
+        st.success(L("Uploaded. Click **Reload data / clear cache** in the sidebar, then reopen Diagnostics.",
+                     "تم الرفع. اضغط **تحديث البيانات / مسح الذاكرة المؤقتة** من الشريط الجانبي، ثم افتح التشخيص."))
+
+    st.markdown(L("### Maintenance","### صيانة"))
+    force_merge = st.button(L("Force re-merge from parts (ajd_catalogue_raw.part*.csv)","إعادة الدمج من الأجزاء"), key="diag_force_merge_btn")
+    show_parts = st.button(L("Show part files","عرض ملفات الأجزاء"), key="diag_show_parts_btn")
+    if force_merge:
+        merged = DATA_DIR / "ajd_catalogue_raw.csv"
+        try:
+            if merged.exists(): merged.unlink()
+            ok = _merge_chunked_csv(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"), merged)
+            load_catalogue_df.clear()
+            if ok:
+                st.success(L("Re-merged successfully. Click **Reload data / clear cache** in the sidebar.",
+                             "تم الدمج بنجاح. اضغط **تحديث البيانات / مسح الذاكرة المؤقتة** من الشريط الجانبي."))
+            else:
+                st.warning(L("No part files found matching pattern.","لا توجد ملفات أجزاء مطابقة للنمط."))
+        except Exception as e:
+            st.error(L(f"Re-merge failed: {e}", f"فشل الدمج: {e}"))
+    if show_parts:
+        st.write(sorted(glob.glob(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"))))
+        
         # Column preset for Search tab
         st.markdown("### Column preset for Search tab")
         if not cat_df_preview.empty:
@@ -731,10 +774,12 @@ with logline_tab:
                 st.error(f"Re-merge failed: {e}")
         if show_parts:
             st.write(sorted(glob.glob(str(DATA_DIR / "ajd_catalogue_raw.part*.csv"))))
-
-    st.markdown("---")
-    st.caption("© 2025 ICON Studio — AJD Topic Explorer Dashboard. Add `streamlit` to requirements.txt and run: `streamlit run app.py`")
-
+            
+st.markdown("---")
+st.caption(L(
+    "© 2025 ICON Studio — AJD Topic Explorer Dashboard.",
+    "© 2025 ICON Studio — لوحة استكشاف موضوعات AJD."
+))
 
 if __name__ == "__main__":
     main()
