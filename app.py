@@ -41,13 +41,15 @@ def _merge_chunked_csv(pattern: str, merged_path: Path) -> bool:
 
 @st.cache_data(show_spinner=False)
 def load_topics_df() -> pd.DataFrame:
+    """Load topics file or auto-merge parts."""
     p = DATA_DIR / "ajd_topics_extracted.csv"
     if not p.exists():
         _merge_chunked_csv(str(DATA_DIR / "ajd_topics_extracted.part*.csv"), p)
     if not p.exists():
         return pd.DataFrame(columns=["topic", "count"])
     try:
-        df = pd.read_csv(p, dtype=str, na_filter=False, keep_default_na=False, engine="python", on_bad_lines="skip")
+        df = pd.read_csv(p, dtype=str, na_filter=False, keep_default_na=False,
+                         engine="python", on_bad_lines="skip")
     except Exception:
         return pd.DataFrame(columns=["topic", "count"])
     cols = [c.strip().lower() for c in df.columns]
@@ -114,13 +116,13 @@ def infer_text_columns(df: pd.DataFrame) -> List[str]:
     return [c for c in df.columns if patt.search(str(c))]
 
 
-@st.cache_data(show_spinner=False)
-def tfidf_similarities(ajd_texts: List[str], proj_texts: List[str], min_df: int = 2) -> Tuple[pd.DataFrame, List[int]]:
-    vectorizer = TfidfVectorizer(min_df=min_df, ngram_range=(1, 2))
-    X = vectorizer.fit_transform(ajd_texts + proj_texts)
-    n_ajd = len(ajd_texts)
-    sim = cosine_similarity(X[n_ajd:], X[:n_ajd])
-    return pd.DataFrame(sim), list(range(n_ajd))
+def _clean_hidden_series(s: pd.Series) -> pd.Series:
+    """Remove zero-width/bidi chars and normalize spaces."""
+    import re as _re
+    ZW_PATTERN = _re.compile(r"[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
+    WS_PATTERN = _re.compile(r"\s+")
+    return s.astype(str).fillna("").map(lambda x: WS_PATTERN.sub(" ", ZW_PATTERN.sub("", x)).strip())
+
 
 # ============================ App ============================
 
@@ -129,28 +131,27 @@ def main() -> None:
     st.title(APP_TITLE)
     st.caption("Search the Al Jazeera Documentary catalogue, compare your projects, and get stronger loglines.")
 
-   # ----- Sidebar -----
-with st.sidebar:
-    st.header("Dataset")
-    topics_df = load_topics_df()
-    cat_df = load_catalogue_df()
-    st.write("**Topics**", f"{len(topics_df):,} rows" if not topics_df.empty else "— missing")
-    st.write("**Catalogue**", f"{len(cat_df):,} rows" if not cat_df.empty else "— missing")
+    # ----- Sidebar -----
+    with st.sidebar:
+        st.header("Dataset")
+        topics_df = load_topics_df()
+        cat_df = load_catalogue_df()
+        st.write("**Topics**", f"{len(topics_df):,} rows" if not topics_df.empty else "— missing")
+        st.write("**Catalogue**", f"{len(cat_df):,} rows" if not cat_df.empty else "— missing")
 
-    # Reset UI state to avoid Streamlit KeyError on widget changes
-    if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
-        st.session_state.clear()
-        st.rerun()
+        # Reset UI state to avoid Streamlit KeyError on widget changes
+        if st.button("Reset UI state (fix KeyError)", key="sb_reset_state"):
+            st.session_state.clear()
+            st.rerun()
 
-    if st.button("Reload data / clear cache", key="sb_reload"):
-        load_topics_df.clear()
-        load_catalogue_df.clear()
-        infer_text_columns.clear()
-        tfidf_similarities.clear()
-        st.rerun()
+        if st.button("Reload data / clear cache", key="sb_reload"):
+            load_topics_df.clear()
+            load_catalogue_df.clear()
+            infer_text_columns.clear()
+            st.rerun()
 
-    if topics_df.empty or cat_df.empty:
-        st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
+        if topics_df.empty or cat_df.empty:
+            st.warning("If merged CSVs are missing, the app will merge `/data/...partNN.csv` on first run.")
 
     # ----- Tabs (define BEFORE use) -----
     search_tab, compare_tab, similar_tab, logline_tab, diag_tab = st.tabs([
@@ -170,7 +171,6 @@ with st.sidebar:
         else:
             # Use preset from Diagnostics if available
             text_cols_default = infer_text_columns(cat_df)
-            # guard against empty preset
             if "diag_cols_preset" in st.session_state and not st.session_state["diag_cols_preset"]:
                 del st.session_state["diag_cols_preset"]
             preset = st.session_state.get("diag_cols_preset")
@@ -189,18 +189,6 @@ with st.sidebar:
             mode = st.selectbox("Match mode", ["Contains (case-insensitive)", "Exact (case-insensitive)", "Regex"], index=0, key="search_mode")
             max_rows = st.slider("Max rows to show", 10, 2000, 200, key="search_max_rows")
 
-            # Clean hidden zero-width/RTL chars and whitespace
-            import re as _re
-            ZW_PATTERN = _re.compile(r"[\u200B-\u200F\u202A-\u202E\u2066-\u2069]")
-            WS_PATTERN = _re.compile(r"\s+")
-
-            def clean_hidden(s: str) -> str:
-                if not isinstance(s, str):
-                    s = str(s)
-                s = ZW_PATTERN.sub("", s)
-                s = WS_PATTERN.sub(" ", s).strip()
-                return s
-
             # Quick Probe
             quick_probe_clicked = st.button("Quick Probe (per-column matches)", key="search_quick_probe_btn")
             if quick_probe_clicked:
@@ -211,12 +199,12 @@ with st.sidebar:
                     out = []
                     nonempty = []
                     for c in use_cols:
-                        s = cat_df[c].astype(str).fillna("").map(clean_hidden)
+                        s = _clean_hidden_series(cat_df[c])
                         try:
                             if mode == "Contains (case-insensitive)":
                                 n = s.str.contains(q, case=False, na=False, regex=False).sum()
                             elif mode == "Exact (case-insensitive)":
-                                n = (s.str.strip().str.lower() == q.strip().lower()).sum()
+                                n = (s.str.strip().str.lower() == q.strip().str.lower()).sum()
                             else:
                                 n = s.str.contains(q, case=False, na=False, regex=True).sum()
                         except Exception:
@@ -238,7 +226,7 @@ with st.sidebar:
                         use_cols = list(cat_df.columns) if search_all or not cols else cols
                         df = cat_df.copy()
                         for c in use_cols:
-                            df[c] = df[c].astype(str).fillna("").map(clean_hidden)
+                            df[c] = _clean_hidden_series(df[c])
 
                         if fallback_combine:
                             combo = df[use_cols].agg(" ".join, axis=1)
@@ -269,7 +257,7 @@ with st.sidebar:
                             st.write("**Sample hits (chosen columns):**")
                             st.dataframe(res[show_cols].head(20), use_container_width=True)
                             st.download_button("Download results (CSV)", res.to_csv(index=False).encode("utf-8"),
-                                               file_name="ajd_search_results.csv", mime="text/csv")
+                                               file_name="ajd_search_results.csv", mime="text/csv", key="search_dl")
                         else:
                             st.dataframe(res, use_container_width=True)
                     except Exception as e:
@@ -285,7 +273,8 @@ with st.sidebar:
         if uploaded is not None:
             try:
                 if uploaded.name.lower().endswith(".csv"):
-                    p = pd.read_csv(uploaded, dtype=str, na_filter=False, keep_default_na=False, engine="python", on_bad_lines="skip")
+                    p = pd.read_csv(uploaded, dtype=str, na_filter=False, keep_default_na=False,
+                                    engine="python", on_bad_lines="skip")
                     st.write("Your CSV preview:"); st.dataframe(p.head(10), use_container_width=True)
                     def explode_topics_str(text: str) -> List[str]:
                         parts = re.split(r"[;,/|·•\-–—]+", str(text))
