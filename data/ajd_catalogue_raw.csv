@@ -1,12 +1,2 @@
-# Put this inside the Diagnostics tab, under the existing previews:
 
-st.markdown("### Upload/Replace catalogue CSV (session-only)")
-up = st.file_uploader("Upload your full catalogue CSV", type=["csv"])
-if up is not None:
-    import os
-    os.makedirs(DATA_DIR, exist_ok=True)
-    out_path = DATA_DIR / "ajd_catalogue_raw.csv"
-    with open(out_path, "wb") as f:
-        f.write(up.getbuffer())
-    load_catalogue_df.clear()  # clear cache
-    st.success(f"Saved to {out_path}. Click 'Reload data / clear cache' in the sidebar, then re-open Diagnostics.")
+Title_EN,Title_AR,Synopsis_EN,Synopsis_AR,Genre,Year,Series,Category,Tags,Location,Director
