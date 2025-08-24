@@ -443,10 +443,10 @@ def main() -> None:
     # ============================ TAB 4: Loglines (Bilingual + Presets) ============================
     with logline_tab:
         # UI labels depend on language
-        st.subheader(L("Suggest Strong Loglines","إنشاء لوجلاين قوي"))
+        st.subheader(L("Suggest Strong Loglines","إنشاء ملخص قصة قوي"))
         st.caption(L(
             "Generates a tight tagline + a detailed commissioning logline, with presets & anti-cliché.",
-            "ينتج شعارًا قصيرًا جذابًا + لوجلاين تفصيلي للعرض، مع قوالب جاهزة ومعالجة للكليشيهات."
+            "ينتج شعارًا قصيرًا جذابًا + ملخص قصة تفصيلي للعرض، مع قوالب جاهزة ومعالجة للكليشيهات."
         ))
 
         seed = st.text_area(
