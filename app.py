@@ -11,6 +11,7 @@ from typing import List, Tuple
 
 import pandas as pd
 import streamlit as st
+import os
 
 # Optional (Similarity tab). App still runs if sklearn isn't available.
 try:
@@ -19,6 +20,13 @@ try:
     SKLEARN_OK = True
 except Exception:
     SKLEARN_OK = False
+
+# Attempt to import OpenAI if available; used for AI-powered loglines
+try:
+    import openai  # noqa: F401
+    OPENAI_AVAILABLE = True
+except Exception:
+    OPENAI_AVAILABLE = False
 
 APP_TITLE = "AJD Topic Explorer — بحث ثنائي اللغة"
 DATA_DIR = Path("data")
@@ -160,7 +168,7 @@ def main() -> None:
     st.title("AJD Topic Explorer — لوحة ثنائية اللغة")
     st.caption(L(
         "Search the AJD catalogue, compare topics, find matches, and craft bilingual loglines.",
-        "ابحث في فهرس AJD، قارن الموضوعات، اعثر على تطابقات، وأنشئ ملخص القصة ثنائي اللغة."
+        "ابحث في فهرس AJD، قارن الموضوعات، اعثر على تطابقات، وأنشئ لوجلاين ثنائي اللغة."
     ))
 
     # ----- Sidebar -----
@@ -195,7 +203,7 @@ def main() -> None:
         L("🔎 Search AJD Catalogue","🔎 البحث في فهرس AJD"),
         L("🔁 Topic Overlap","🔁 تقاطع الموضوعات"),
         L("🧭 Similarity Matches","🧭 أقرب تطابقات"),
-        L("🪄 Logline Suggestions","🪄 اقتراح ملخص القصة"),
+        L("🪄 Logline Suggestions","🪄 اقتراح لوجلاين"),
         L("🧰 Diagnostics","🧰 التشخيص"),
     ])
 
@@ -443,10 +451,10 @@ def main() -> None:
     # ============================ TAB 4: Loglines (Bilingual + Presets) ============================
     with logline_tab:
         # UI labels depend on language
-        st.subheader(L("Suggest Strong Loglines","إنشاء ملخص قصة قوي"))
+        st.subheader(L("Suggest Strong Loglines","إنشاء لوجلاين قوي"))
         st.caption(L(
             "Generates a tight tagline + a detailed commissioning logline, with presets & anti-cliché.",
-            "ينتج شعارًا قصيرًا جذابًا + ملخص قصة تفصيلي للعرض، مع قوالب جاهزة ومعالجة للكليشيهات."
+            "ينتج شعارًا قصيرًا جذابًا + لوجلاين تفصيلي للعرض، مع قوالب جاهزة ومعالجة للكليشيهات."
         ))
 
         seed = st.text_area(
@@ -500,6 +508,16 @@ def main() -> None:
 
         anti_cliche = st.checkbox(L("Remove clichés (untold, explores, journey…)","إزالة الكليشيهات (غير مسبوق، يستكشف، رحلة...)"), value=True, key="log_anticliche")
         freshness_nudge = st.checkbox(L("Nudge for freshness vs common AJD framings","تعزيز الجِدة مقابل القوالب الشائعة"), value=True, key="log_freshness")
+
+        # Optionally use ChatGPT/OpenAI to generate loglines instead of the template-based method.
+        use_ai = st.checkbox(
+            L(
+                "Use ChatGPT for loglines (requires OPENAI_API_KEY)",
+                "استخدم ChatGPT لإنشاء اللوجلاين (يتطلب OPENAI_API_KEY)"
+            ),
+            value=False,
+            key="log_use_ai"
+        )
 
         # Preset application (evaluated at generation time)
         def preset_defaults(name: str):
@@ -713,29 +731,96 @@ def main() -> None:
             if not seed.strip():
                 st.warning(L("Please add a short seed.","الرجاء إدخال وصف قصير أولاً."))
             else:
-                rows = build_loglines(seed, tone_used, angles_used, n_variants, short_used, detail_used, add_angle_note)
-                if not rows:
-                    st.info(L("No output. Try different angles or increase word targets.","لا يوجد ناتج. جرّب زوايا أخرى أو زد عدد الكلمات."))
+                # If the user opted to use AI and prerequisites are met, try to generate loglines via OpenAI
+                if use_ai:
+                    if not OPENAI_AVAILABLE:
+                        st.error(L(
+                            "The openai package is not installed. Please ensure it is listed in requirements.txt.",
+                            "حزمة openai غير مثبتة. يرجى التأكد من إضافتها في ملف المتطلبات requirements.txt."
+                        ))
+                    else:
+                        api_key = os.getenv("OPENAI_API_KEY")
+                        if not api_key:
+                            st.error(L(
+                                "Environment variable OPENAI_API_KEY is not set. Please set it before using ChatGPT.",
+                                "متغير البيئة OPENAI_API_KEY غير معرّف. الرجاء ضبطه قبل استخدام ChatGPT."
+                            ))
+                        else:
+                            angles_str = ", ".join(angles_used) if angles_used else ""
+                            prompt_en = (
+                                "You are a creative writer who crafts short, compelling loglines for documentary film proposals "
+                                "in both English and Arabic. "
+                                f"Generate {n_variants} variants for the following film description. "
+                                "Each variant should include an English tagline (" 
+                                f"<= {short_used} words), an Arabic tagline (<= {short_used} words), "
+                                "an English detailed logline (" 
+                                f"<= {detail_used} words), and an Arabic detailed logline "
+                                f"(<= {detail_used} words). "
+                                f"Film description: {seed.strip()}. Tone: {tone_used}. Angles: {angles_str}. "
+                                "Output each variant as four lines in the order: English tagline, Arabic tagline, "
+                                "English detailed, Arabic detailed, separated by newlines. Separate variants with a blank line."
+                            )
+                            try:
+                                openai.api_key = api_key
+                                resp = openai.ChatCompletion.create(
+                                    model="gpt-4o",
+                                    messages=[
+                                        {"role": "system",
+                                         "content": "You are an assistant that writes bilingual loglines for documentary proposals."},
+                                        {"role": "user", "content": prompt_en},
+                                    ],
+                                    max_tokens=800,
+                                    temperature=0.7,
+                                )
+                                content = resp.choices[0].message.get("content", "").strip()
+                                if not content:
+                                    st.info(L(
+                                        "No output returned from OpenAI.",
+                                        "لم يرجع OpenAI أي مخرجات."
+                                    ))
+                                else:
+                                    st.markdown(L("### AI-generated loglines","### لوجلاين منشأ بالذكاء الاصطناعي"))
+                                    variants = [block.strip() for block in content.split("\n\n") if block.strip()]
+                                    for v in variants:
+                                        lines = [ln.strip() for ln in v.split("\n") if ln.strip()]
+                                        st.divider()
+                                        if len(lines) >= 1:
+                                            st.write(f"**{L('English Tagline','الشعار القصير بالإنجليزية')}**: {lines[0]}")
+                                        if len(lines) >= 2:
+                                            st.write(f"**{L('Arabic Tagline','الشعار القصير بالعربية')}**: {lines[1]}")
+                                        if len(lines) >= 3:
+                                            st.write(f"**{L('English Detailed','اللوجلاين التفصيلي بالإنجليزية')}**: {lines[2]}")
+                                        if len(lines) >= 4:
+                                            st.write(f"**{L('Arabic Detailed','اللوجلاين التفصيلي بالعربية')}**: {lines[3]}")
+                            except Exception as e:
+                                st.error(L(
+                                    f"Error from OpenAI: {e}",
+                                    f"خطأ من OpenAI: {e}"
+                                ))
+                # If AI not used, fall back to the template-based logline generation
                 else:
-                    for idx, r in enumerate(rows, 1):
-                        st.markdown(f"### {idx}. {r['angle']}")
-                        st.write(f"**{L('Tagline','الشعار القصير')}:** {r['tagline']}")
-                        st.write(f"**{L('Detailed','اللوجلاين التفصيلي')}:** {r['detailed']}")
-                        if add_angle_note and r["note"]:
-                            st.caption(r["note"])
-                        st.divider()
-
-                    import io
-                    buf = io.StringIO()
-                    for idx, r in enumerate(rows, 1):
-                        buf.write(f"{idx}. {r['angle']}\n")
-                        buf.write(f"   {L('Tagline','الشعار')}: {r['tagline']}\n")
-                        buf.write(f"   {L('Detailed','تفصيلي')}: {r['detailed']}\n")
-                        if add_angle_note and r["note"]:
-                            buf.write(f"   {L('Note','ملاحظة')}: {r['note']}\n\n")
-                    st.download_button(L("Download all loglines (.txt)","تحميل جميع اللوجلاينات (.txt)"),
-                                       buf.getvalue().encode("utf-8"),
-                                       file_name="loglines_bilingual.txt", key="log_dl_bi")
+                    rows = build_loglines(seed, tone_used, angles_used, n_variants, short_used, detail_used, add_angle_note)
+                    if not rows:
+                        st.info(L("No output. Try different angles or increase word targets.","لا يوجد ناتج. جرّب زوايا أخرى أو زد عدد الكلمات."))
+                    else:
+                        for idx, r in enumerate(rows, 1):
+                            st.markdown(f"### {idx}. {r['angle']}")
+                            st.write(f"**{L('Tagline','الشعار القصير')}:** {r['tagline']}")
+                            st.write(f"**{L('Detailed','اللوجلاين التفصيلي')}:** {r['detailed']}")
+                            if add_angle_note and r["note"]:
+                                st.caption(r["note"])
+                            st.divider()
+                        import io
+                        buf = io.StringIO()
+                        for idx, r in enumerate(rows, 1):
+                            buf.write(f"{idx}. {r['angle']}\n")
+                            buf.write(f"   {L('Tagline','الشعار')}: {r['tagline']}\n")
+                            buf.write(f"   {L('Detailed','تفصيلي')}: {r['detailed']}\n")
+                            if add_angle_note and r["note"]:
+                                buf.write(f"   {L('Note','ملاحظة')}: {r['note']}\n\n")
+                        st.download_button(L("Download all loglines (.txt)","تحميل جميع اللوجلاينات (.txt)"),
+                                           buf.getvalue().encode("utf-8"),
+                                           file_name="loglines_bilingual.txt", key="log_dl_bi")
 
     # ============================ TAB 5: Diagnostics ============================
     with diag_tab:
