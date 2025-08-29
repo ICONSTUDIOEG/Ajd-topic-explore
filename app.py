@@ -22,8 +22,8 @@ except Exception:
     SKLEARN_OK = False
 
  # Attempt to import OpenAI if available; used for AI-powered loglines
-try:
-from openai import OpenAI
+ try:
+    from openai import OpenAI
     import openai  # noqa: F401
 import os
     OPENAI_AVAILABLE = True
