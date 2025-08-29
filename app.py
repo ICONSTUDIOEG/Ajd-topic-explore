@@ -457,6 +457,26 @@ def main() -> None:
                                    f"JSON غير صالح أو خطأ أثناء الحساب: {e}"))
 
     # ============================ TAB 4: Loglines (Bilingual + Presets) ============================
+    from openai import OpenAI
+import os
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    st.error("OPENAI_API_KEY environment variable missing.")
+else:
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system",
+             "content": "You are an assistant that writes bilingual loglines for documentary proposals."},
+            {"role": "user", "content": prompt_en},
+        ],
+        max_tokens=800,
+        temperature=0.7,
+    )
+    content = response.choices[0].message.content
+    # ...process the returned content...
+
     with logline_tab:
         # UI labels depend on language
         st.subheader(L("Suggest Strong Loglines","إنشاء لوجلاين قوي"))
