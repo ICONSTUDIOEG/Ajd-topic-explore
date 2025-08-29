@@ -22,11 +22,19 @@ except Exception:
     SKLEARN_OK = False
 
 # Attempt to import OpenAI if available; used for AI-powered loglines
-try:
-    import openai  # noqa: F401
-    OPENAI_AVAILABLE = True
-except Exception:
-    OPENAI_AVAILABLE = False
+from openai import OpenAI
+import os
+
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key)  # optional, defaults to reading from environment
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": prompt_en}],
+    max_tokens=800,
+    temperature=0.7,
+)
+content = response.choices[0].message.content
 
 APP_TITLE = "AJD Topic Explorer — بحث ثنائي اللغة"
 DATA_DIR = Path("data")
