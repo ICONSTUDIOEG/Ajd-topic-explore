@@ -30,6 +30,38 @@ except Exception:
     # If import fails, either the package is not installed or is an older version
     OPENAI_AVAILABLE = False
 
+# -----------------------------------------------------------------------------
+# Utility to sanitize text before sending to OpenAI. Some environments default
+# to ASCII and cannot encode certain unicode characters (e.g. non‑breaking
+# hyphens \u2011). This helper replaces problematic characters with safe
+# alternatives to prevent encoding errors when making API calls.
+def _sanitize_for_openai(text: str) -> str:
+    """
+    Replace characters that might cause ASCII encoding errors (e.g. non-breaking
+    hyphens) with safer equivalents. This helps avoid errors like:
+    'ascii' codec can't encode character '\u2011' in position ...
+
+    Args:
+        text: The text to sanitize.
+
+    Returns:
+        A sanitized string safe for JSON encoding.
+    """
+    if not isinstance(text, str):
+        return text
+    return (
+        text
+        # replace various hyphen-like unicode characters with a simple hyphen
+        .replace("\u2011", "-")  # non-breaking hyphen
+        .replace("\u2012", "-")  # figure dash
+        .replace("\u2013", "-")  # en dash
+        .replace("\u2014", "-")  # em dash
+        .replace("\u2015", "-")  # horizontal bar
+        # replace non-breaking spaces with regular spaces
+        .replace("\u00A0", " ")
+        .replace("\u202F", " ")
+    )
+
 APP_TITLE = "AJD Topic Explorer — بحث ثنائي اللغة"
 DATA_DIR = Path("data")
 
@@ -764,6 +796,8 @@ def main() -> None:
                             )
                             try:
                             # Instantiate a client and call the new chat completions API
+                                # Sanitize the prompt to avoid ASCII encoding errors
+                                prompt_en = _sanitize_for_openai(prompt_en)
                                 client = OpenAI(api_key=api_key)
                                 resp = client.chat.completions.create(
                                     model="gpt-4o",
