@@ -49,18 +49,26 @@ def _sanitize_for_openai(text: str) -> str:
     """
     if not isinstance(text, str):
         return text
-    return (
+    # First replace various hyphen-like unicode characters and non-breaking
+    # spaces with simple ASCII equivalents.
+    sanitized = (
         text
-        # replace various hyphen-like unicode characters with a simple hyphen
         .replace("\u2011", "-")  # non-breaking hyphen
         .replace("\u2012", "-")  # figure dash
         .replace("\u2013", "-")  # en dash
         .replace("\u2014", "-")  # em dash
         .replace("\u2015", "-")  # horizontal bar
-        # replace non-breaking spaces with regular spaces
-        .replace("\u00A0", " ")
-        .replace("\u202F", " ")
+        .replace("\u00A0", " ")  # non-breaking space
+        .replace("\u202F", " ")  # narrow no-break space
     )
+    # Then remove any remaining non-ASCII characters. This prevents encoding
+    # errors in environments where the default encoding is ASCII. Characters
+    # outside the ASCII range are silently dropped.
+    try:
+        return sanitized.encode("ascii", "ignore").decode("ascii")
+    except Exception:
+        # As a fallback, return the partially sanitized text
+        return sanitized
 
 APP_TITLE = "AJD Topic Explorer — بحث ثنائي اللغة"
 DATA_DIR = Path("data")
