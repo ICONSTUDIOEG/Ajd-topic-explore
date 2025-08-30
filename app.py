@@ -21,20 +21,14 @@ try:
 except Exception:
     SKLEARN_OK = False
 
-from openai import OpenAI
-import os
-
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key)  # optional, defaults to reading from environment
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": prompt_en}],
-    max_tokens=800,
-    temperature=0.7,
-)
-content = response.choices[0].message.content
-
+# Attempt to import the OpenAI client class if available; used for AI-powered loglines
+try:
+    # In openai>=1.0.0 the API is accessed via an OpenAI client instance
+    from openai import OpenAI  # type: ignore[import-not-found]
+    OPENAI_AVAILABLE = True
+except Exception:
+    # If import fails, either the package is not installed or is an older version
+    OPENAI_AVAILABLE = False
 
 APP_TITLE = "AJD Topic Explorer — بحث ثنائي اللغة"
 DATA_DIR = Path("data")
@@ -457,26 +451,6 @@ def main() -> None:
                                    f"JSON غير صالح أو خطأ أثناء الحساب: {e}"))
 
     # ============================ TAB 4: Loglines (Bilingual + Presets) ============================
-    from openai import OpenAI
-import os
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    st.error("OPENAI_API_KEY environment variable missing.")
-else:
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system",
-             "content": "You are an assistant that writes bilingual loglines for documentary proposals."},
-            {"role": "user", "content": prompt_en},
-        ],
-        max_tokens=800,
-        temperature=0.7,
-    )
-    content = response.choices[0].message.content
-    # ...process the returned content...
-
     with logline_tab:
         # UI labels depend on language
         st.subheader(L("Suggest Strong Loglines","إنشاء لوجلاين قوي"))
@@ -789,8 +763,9 @@ else:
                                 "English detailed, Arabic detailed, separated by newlines. Separate variants with a blank line."
                             )
                             try:
-                                openai.api_key = api_key
-                                resp = openai.ChatCompletion.create(
+                            # Instantiate a client and call the new chat completions API
+                                client = OpenAI(api_key=api_key)
+                                resp = client.chat.completions.create(
                                     model="gpt-4o",
                                     messages=[
                                         {"role": "system",
@@ -800,7 +775,8 @@ else:
                                     max_tokens=800,
                                     temperature=0.7,
                                 )
-                                content = resp.choices[0].message.get("content", "").strip()
+                                # In the new SDK, the response is a pydantic model; access content via the message property
+                                content = resp.choices[0].message.content.strip()
                                 if not content:
                                     st.info(L(
                                         "No output returned from OpenAI.",
